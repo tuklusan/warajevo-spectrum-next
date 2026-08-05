@@ -63,15 +63,31 @@ public partial class MainWindow : Window
 
     private void TryAutoBoot()
     {
-        // Look for ROMs under $WARAJEVO_NEXT_ROMS or ./roms
-        var envDir = Environment.GetEnvironmentVariable("WARAJEVO_NEXT_ROMS");
-        var candidates = new[] { envDir, Path.Combine(AppContext.BaseDirectory, "roms"), "roms" }
-                            .Where(p => !string.IsNullOrEmpty(p)).Select(p => p!).ToArray();
+        // ROM lookup order:
+        //   1. Program.RomPath      - --rom PATH on the command line
+        //   2. $WARAJEVO_NEXT_ROMS  - directory containing 48.rom
+        //   3. AppContext.BaseDirectory/roms
+        //   4. ./roms
+        //   5. ../../roms/spectrum-48k relative to BaseDirectory (repo layout,
+        //      handy when running from bin/Release/net10.0 inside the checkout)
         byte[]? rom48 = null;
-        foreach (var d in candidates)
+        if (!string.IsNullOrEmpty(Program.RomPath) && File.Exists(Program.RomPath))
+            rom48 = File.ReadAllBytes(Program.RomPath);
+        if (rom48 == null)
         {
-            var f = Path.Combine(d, "48.rom");
-            if (File.Exists(f)) { rom48 = File.ReadAllBytes(f); break; }
+            var envDir = Environment.GetEnvironmentVariable("WARAJEVO_NEXT_ROMS");
+            var candidates = new[]
+            {
+                envDir,
+                Path.Combine(AppContext.BaseDirectory, "roms"),
+                "roms",
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", "roms", "spectrum-48k"),
+            }.Where(p => !string.IsNullOrEmpty(p)).Select(p => p!).ToArray();
+            foreach (var d in candidates)
+            {
+                var f = Path.Combine(d, "48.rom");
+                if (File.Exists(f)) { rom48 = File.ReadAllBytes(f); break; }
+            }
         }
         if (rom48 == null || rom48.Length < 0x4000)
         {
@@ -81,6 +97,17 @@ public partial class MainWindow : Window
         else SetStatus($"Booted with 48.rom ({rom48.Length} bytes).");
         _machine = new SpectrumMachine(SpectrumModel.FortyEight, rom48);
         _machine.Reset();
+
+        // If the user passed --tape PATH, auto-load and play it. Fast-load
+        // trap at 0x0556 will consume the blocks as the ROM calls LD-BYTES.
+        if (!string.IsNullOrEmpty(Program.TapePath) && File.Exists(Program.TapePath))
+        {
+            var data = File.ReadAllBytes(Program.TapePath);
+            _machine.Tape = new TapeDevice();
+            _machine.Tape.LoadTap(data);
+            _machine.Tape.Play();
+            SetStatus($"Auto-loaded tape: {Path.GetFileName(Program.TapePath)} ({_machine.Tape.Blocks} block(s)). Type J then Symbol-Shift+P Symbol-Shift+P Enter to LOAD.");
+        }
     }
 
     private void SwitchModel(SpectrumModel m)

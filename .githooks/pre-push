@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Local hard gate: refuse to push anything containing the banned word.
+# Mirrors the server-side workflow so a bad push fails on your machine
+# before hitting GitHub. Enable once with:
+#   git config core.hooksPath .githooks
+set -euo pipefail
+PATTERN='[Cc][Ll][Aa][Uu][Dd][Ee]'
+remote="$1"; url="$2"
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    range="$local_sha"; range_arg="$local_sha"
+  else
+    range="$remote_sha..$local_sha"; range_arg="$range"
+  fi
+  # Commit metadata + diff scan for the pushed range
+  bad_meta=$(git log --format='%H%n%s%n%b%n%an <%ae>%n%cn <%ce>' $range_arg 2>/dev/null | grep -InE "$PATTERN" || true)
+  bad_diff=$(git log -p --format='commit %H' $range_arg 2>/dev/null | grep -InE "^\\+.*$PATTERN" || true)
+  # Working-tree scan (any tracked file, excluding the hook itself and the workflow)
+  bad_tree=$(git grep -InE "$PATTERN" -- ':(exclude).githooks/pre-push' ':(exclude).github/workflows/no-banned-word.yml' 2>/dev/null || true)
+  if [ -n "$bad_meta$bad_diff$bad_tree" ]; then
+    echo "pre-push: banned word detected -- push refused." >&2
+    [ -n "$bad_tree" ] && { echo "-- working tree --" >&2; echo "$bad_tree" >&2; }
+    [ -n "$bad_meta" ] && { echo "-- commit metadata --" >&2; echo "$bad_meta" >&2; }
+    [ -n "$bad_diff" ] && { echo "-- diff --"           >&2; echo "$bad_diff" >&2; }
+    exit 1
+  fi
+done
+exit 0

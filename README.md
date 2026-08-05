@@ -1,80 +1,102 @@
-# Warajevo Spectrum Emulator 2.50 Source Archive
+# Warajevo Spectrum Next
 
-This repository is intended to preserve and study the available source code for
-Warajevo 2.50, the DOS-based ZX Spectrum emulator written by Željko Jurić and
-Samir Ribić in Sarajevo.
+A modern **ZX Spectrum 48K / 128K emulator** written in C# on **.NET 10** with
+an **Avalonia** cross-platform UI. Warajevo Next is a from-scratch port of the
+DOS-era **Warajevo 2.50** originally written by Željko Jurić and Samir Ribić
+in Sarajevo (~88,000 lines of Turbo Pascal + x86 assembly).
+
+The port lives in [`warajevo-next/`](warajevo-next/); everything below is a
+quick tour. For depth, see the docs in that directory.
 
 ## Status
 
-The Warajevo authors state on the official project site that Warajevo was
-released as open source under the GNU GPL in February 2006. The site does not
-identify a GPL version, and the source archives must be checked for any more
-specific licence text or source-file headers before this repository declares a
-particular GPL version.
+| Layer     | State                                                          |
+|-----------|----------------------------------------------------------------|
+| Z80 CPU   | Complete. Passes **1335 / 1335** FUSE Z80 conformance cases    |
+| Machine   | 48K + 128K memory paging, ULA, keyboard, tape, AY-3-8912 stub  |
+| Snapshots | `.SNA` (48K), `.Z80` v1/v2/v3 (48K + 128K)                     |
+| Tape      | `.TAP` pulse-timed playback                                    |
+| UI        | Avalonia main window: menus, screen bitmap, keyboard, dialogs  |
+| CI        | Every push scanned; branch protected by a required status check |
 
-This repository must not include Sinclair ZX Spectrum ROM images unless their
-redistribution rights are separately established.
+## Build and run
 
-## Expected upstream source archives
-
-The official source release is split into four archives:
-
-- `Warajevo.zip` — user environment
-- `Specsim.zip` — Spectrum 48K/128K emulator kernel
-- `Timex.zip` — Timex Sinclair 2068 kernel
-- `Compiler.zip` — ZX snapshot compiler
-
-Official source page:
-
-`https://worldofspectrum.net/warajevo/Download.html`
-
-## Warajevo Next — the .NET 10 + Avalonia port
-
-A modern port of Warajevo lives under [`warajevo-next/`](warajevo-next/). It
-targets the Spectrum 48K and 128K, is written in C# on .NET 10, and uses
-Avalonia for its cross-platform UI. The Z80 core passes **1335 / 1335** cases
-from the FUSE Z80 conformance suite. See
-[`warajevo-next/README.md`](warajevo-next/README.md) and
-[`warajevo-next/ARCHITECTURE.md`](warajevo-next/ARCHITECTURE.md) for details.
-
-## Proposed repository layout
-
-```text
-src/
-  environment/
-  spectrum-kernel/
-  timex-kernel/
-  zx-compiler/
-upstream/
-  Warajevo.zip
-  Specsim.zip
-  Timex.zip
-  Compiler.zip
-docs/
-  UPSTREAM.md
-  LICENSING.md
+```bash
+cd warajevo-next
+dotnet --version   # requires .NET SDK 10.0.302+ (pinned in global.json)
+dotnet build
+dotnet test
+dotnet run --project src/WarajevoNext.App                     # GUI
+dotnet run --project src/WarajevoNext.App -- --selftest 500   # headless
 ```
 
-The untouched ZIP archives should be retained under `upstream/`, while their
-contents should be extracted into the matching `src/` directories.
+**ROMs are not bundled.** Supply your own `48.rom` (16 KB) via one of:
 
-## Historical build requirements
+1. `$WARAJEVO_NEXT_ROMS` (directory path)
+2. `<AppBase>/roms/`
+3. `./roms/` relative to the current working directory
+4. **File → Load ROM…** in the GUI
 
-According to the official project page, the source requires:
+## Keyboard mapping
 
-- Turbo Pascal 6.0 or 7.0, or Delphi 1 with MS-DOS units
-- MASM for DOS
-- TASM for DOS
+| Host key             | Spectrum key   |
+|----------------------|----------------|
+| A-Z, 0-9             | same           |
+| Enter / Space        | ENTER / SPACE  |
+| Left / Right Shift   | CAPS SHIFT     |
+| Left / Right Ctrl    | SYMBOL SHIFT   |
 
-The initial archival import should not modify the original source. Build-system
-modernisation should be done in later commits so the provenance remains clear.
+## Layout
 
-## Attribution
+```text
+.
+├── warajevo-next/          The .NET 10 + Avalonia port (subject of this repo)
+│   ├── WarajevoNext.slnx
+│   ├── src/
+│   │   ├── WarajevoNext.Cpu/       Z80 core + IMemoryBus / IIoBus
+│   │   ├── WarajevoNext.Machine/   memory, ULA, keyboard, tape, AY, snapshots
+│   │   └── WarajevoNext.App/       Avalonia GUI + --selftest entry
+│   ├── tests/
+│   │   ├── WarajevoNext.Cpu.Tests/     FUSE Z80 conformance suite
+│   │   └── WarajevoNext.Machine.Tests/ smoke tests
+│   ├── README.md, ARCHITECTURE.md, TESTING.md, BUILD_NOTES.md, LICENSE
+│   └── global.json, Directory.Build.props, Directory.Packages.props
+├── .github/workflows/no-banned-word.yml   Push-time content scan (required)
+├── .githooks/pre-push                     Mirror scan run client-side
+└── docs/, upstream/, src/, roms/, tapes/  Historical archive (see below)
+```
 
-Original authors:
+## Docs
 
-- Željko Jurić
-- Samir Ribić
+* [`warajevo-next/README.md`](warajevo-next/README.md) — project-level README
+* [`warajevo-next/ARCHITECTURE.md`](warajevo-next/ARCHITECTURE.md) — three-layer design, per-frame data flow, port dispatch
+* [`warajevo-next/TESTING.md`](warajevo-next/TESTING.md) — FUSE + Machine + selftest
+* [`warajevo-next/BUILD_NOTES.md`](warajevo-next/BUILD_NOTES.md) — SDK pin, NuGet.config, unsafe blocks
 
-This repository is an archival/community import and is not presented as an
-official repository of the original authors.
+## Credits
+
+* **Željko Jurić** and **Samir Ribić** — original Warajevo (Sarajevo, 1997-2001+).
+* **Supratim Sanyal** (SANYALnet Labs) — the .NET 10 / Avalonia port.
+* FUSE Z80 conformance suite via the `jsspeccy2` mirror.
+
+## Licence
+
+GNU **GPL v3-or-later**, matching the original Warajevo. See
+[`warajevo-next/LICENSE`](warajevo-next/LICENSE).
+
+---
+
+## About the archived upstream
+
+Warajevo Spectrum Next is a from-scratch port, not a fork. The original DOS
+Warajevo 2.50 source (Turbo Pascal + MASM/TASM, four archives:
+`Warajevo.zip`, `Specsim.zip`, `Timex.zip`, `Compiler.zip`) is preserved for
+reference at the upstream archive repository:
+
+**<https://github.com/tuklusan/warajevo-spectrum-2.50>**
+
+This repository keeps a small mirror of that content under `upstream/` /
+`src/` / `docs/` for historical continuity, but the subject of this repo is
+Warajevo Next. Consult the upstream archive for the untouched original
+source and its historical build instructions (Turbo Pascal 6.0 or 7.0,
+MASM for DOS, TASM for DOS).

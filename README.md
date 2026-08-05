@@ -63,7 +63,10 @@ dotnet run --project src/WarajevoNext.App -- --selftest 500   # headless
 │   └── global.json, Directory.Build.props, Directory.Packages.props
 ├── .github/workflows/no-banned-word.yml   Push-time content scan (required)
 ├── .githooks/pre-push                     Mirror scan run client-side
-└── docs/, upstream/, src/, roms/, tapes/  Historical archive (see below)
+├── src/, upstream/                        Full archival of DOS Warajevo 2.50 source
+├── docs/                                  Historical documentation for the original
+├── roms/, tapes/                          Preserved originals kept alongside
+└── (see the "About the archived original" section below)
 ```
 
 ## Docs
@@ -86,17 +89,21 @@ GNU **GPL v3-or-later**, matching the original Warajevo. See
 
 ---
 
-## About the archived upstream
+## About the archived original
 
-Warajevo Spectrum Next is a from-scratch port, not a fork. The original DOS
-Warajevo 2.50 source (Turbo Pascal + MASM/TASM, four archives:
-`Warajevo.zip`, `Specsim.zip`, `Timex.zip`, `Compiler.zip`) is preserved for
-reference at the upstream archive repository:
+The working root of this repository is [`warajevo-next/`](warajevo-next/) —
+that is the subject of the repo. Every other top-level directory
+(`src/`, `upstream/`, `docs/`, `roms/`, `tapes/`) is a **complete archival
+of the original DOS Warajevo 2.50** (Turbo Pascal + MASM/TASM, four upstream
+archives: `Warajevo.zip`, `Specsim.zip`, `Timex.zip`, `Compiler.zip`), kept
+in place for historical continuity so the port and its ancestry can be
+read side-by-side in a single clone.
+
+The same archival — untouched — is also maintained standalone at the
+upstream archive repository:
 
 **<https://github.com/tuklusan/warajevo-spectrum-2.50>**
 
-This repository keeps a small mirror of that content under `upstream/` /
-`src/` / `docs/` for historical continuity, but the subject of this repo is
-Warajevo Next. Consult the upstream archive for the untouched original
-source and its historical build instructions (Turbo Pascal 6.0 or 7.0,
-MASM for DOS, TASM for DOS).
+Refer to the upstream archive (or to the top-level directories here) for
+the untouched original source and its historical build instructions
+(Turbo Pascal 6.0 or 7.0, MASM for DOS, TASM for DOS).

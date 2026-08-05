@@ -32,6 +32,9 @@ public sealed class SpectrumMemory : IMemoryBus
 
     public bool ShadowScreen => _shadowScreen;
 
+    /// <summary>128K bank currently paged in at 0xC000 (0..7). 0 on 48K.</summary>
+    public int PageBank => _pageBank;
+
     public SpectrumMemory(SpectrumModel model, byte[] rom48, byte[]? rom128_0 = null, byte[]? rom128_1 = null)
     {
         Model = model;

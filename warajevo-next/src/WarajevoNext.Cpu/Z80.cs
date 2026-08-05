@@ -57,6 +57,11 @@ public sealed class Z80
     // the FUSE expected totals)
     public long TStates;
 
+    // Optional bus-contention hook. Null by default so the FUSE conformance
+    // suite (FlatMemory + NullIo) keeps its exact T-state totals; the machine
+    // layer installs a SpectrumContentionModel when running a real 48K/128K.
+    public IContentionModel? Contention;
+
     // Convenience 16-bit register accessors (little-endian: low = C, high = B).
     public ushort AF { get => (ushort)((A << 8) | F); set { A = (byte)(value >> 8); F = (byte)value; } }
     public ushort BC { get => (ushort)((B << 8) | C); set { B = (byte)(value >> 8); C = (byte)value; } }
@@ -114,16 +119,32 @@ public sealed class Z80
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void Tick(int n) => TStates += n;
 
+    // Charge any ULA-imposed extra delay BEFORE the natural cost of the bus
+    // cycle. When no model is installed these are no-ops and the T-state
+    // totals collapse back to the plain Z80 timings the FUSE tests expect.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private byte ReadByte(ushort addr) { Tick(3); return _bus.Read(addr); }
+    private void ContendM(ushort addr)
+    {
+        if (Contention != null) TStates += Contention.ContendMemory((int)TStates, addr);
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void WriteByte(ushort addr, byte val) { Tick(3); _bus.Write(addr, val); }
+    private void ContendIO(ushort port)
+    {
+        if (Contention != null) TStates += Contention.ContendIo((int)TStates, port);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private byte ReadByte(ushort addr) { ContendM(addr); Tick(3); return _bus.Read(addr); }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void WriteByte(ushort addr, byte val) { ContendM(addr); Tick(3); _bus.Write(addr, val); }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private byte FetchOpcode()
     {
         // opcode fetch is 4 T-states, and increments R.
+        ContendM(PC);
         byte b = _bus.Read(PC);
         Tick(4);
         PC++;
@@ -132,7 +153,7 @@ public sealed class Z80
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private byte FetchByte() { byte b = _bus.Read(PC); Tick(3); PC++; return b; }
+    private byte FetchByte() { ContendM(PC); byte b = _bus.Read(PC); Tick(3); PC++; return b; }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private ushort FetchWord() { byte lo = FetchByte(); byte hi = FetchByte(); return (ushort)((hi << 8) | lo); }
@@ -142,12 +163,14 @@ public sealed class Z80
         // IN r,(C) and IN A,(n) are 11 T-states total; the opcode fetches
         // already account for 4, and the port I/O takes 4 more T-states
         // (1 for address setup, 3 for read).
+        ContendIO(port);
         Tick(4);
         return _io.In(port);
     }
 
     private void OutPort(ushort port, byte val)
     {
+        ContendIO(port);
         Tick(4);
         _io.Out(port, val);
     }
@@ -207,8 +230,8 @@ public sealed class Z80
                 Tick(7);
                 Push(PC);
                 ushort vec = (ushort)((I << 8) | busData);
-                byte lo = _bus.Read(vec); Tick(3);
-                byte hi = _bus.Read((ushort)(vec + 1)); Tick(3);
+                ContendM(vec); byte lo = _bus.Read(vec); Tick(3);
+                ContendM((ushort)(vec + 1)); byte hi = _bus.Read((ushort)(vec + 1)); Tick(3);
                 PC = (ushort)((hi << 8) | lo);
                 WZ = PC;
                 break;
@@ -975,8 +998,8 @@ public sealed class Z80
         // way FUSE expects it is: PC bytes are opcode fetches only for the
         // first two prefix bytes, but here the displacement and opcode read
         // that follow are memory reads with an extra 2 T-states each).
-        sbyte d = (sbyte)_bus.Read(PC); Tick(3); PC++;
-        byte op = _bus.Read(PC); Tick(3); PC++;
+        ContendM(PC); sbyte d = (sbyte)_bus.Read(PC); Tick(3); PC++;
+        ContendM(PC); byte op = _bus.Read(PC); Tick(3); PC++;
         Tick(2);
         ushort ea = (ushort)(ix + d);
         WZ = ea;

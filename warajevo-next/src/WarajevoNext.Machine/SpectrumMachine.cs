@@ -22,10 +22,27 @@ public sealed class SpectrumMachine : IIoBus
     public Keyboard Keyboard { get; }
     public TapeDevice? Tape { get; set; }
     public Ay8912? Ay { get; }
+    public SpectrumContentionModel Contention { get; }
 
     public int TStatesPerFrame { get; }
     public SpectrumModel Model => Memory.Model;
     public long FrameCount { get; private set; }
+
+    /// <summary>
+    /// When true, and the ROM at 0x0000-0x3FFF is recognised as the Sinclair
+    /// 48K image, calls into the LD-BYTES entry-point (0x0556) are trapped
+    /// and satisfied directly out of the TAP stream, skipping the ~5.5 s/KB
+    /// edge decoding. Turn off for cycle-accurate loading (custom loaders).
+    /// </summary>
+    public bool FastLoad { get; set; } = true;
+
+    // Sentinel bytes of the Sinclair 48K ROM at LD-BYTES:
+    //   0556: EB           EX DE,HL
+    //   0557: DD E5        PUSH IX
+    //   0559: 3F           CCF
+    // The 128K "ROM 1" 48K-compatibility image has the same bytes here, so
+    // the same sentinel covers both models.
+    private static readonly byte[] LdBytesSig = { 0xEB, 0xDD, 0xE5, 0x3F };
 
     public SpectrumMachine(SpectrumModel model, byte[] rom48, byte[]? rom128_0 = null, byte[]? rom128_1 = null)
     {
@@ -33,6 +50,11 @@ public sealed class SpectrumMachine : IIoBus
         Keyboard = new Keyboard();
         Ula = new Ula(Memory, Keyboard);
         Cpu = new Z80(Memory, this);
+        // Install the ULA memory- and I/O-contention hook so games that time
+        // themselves off the border stripes (Uridium, Aquaplane, ...) run at
+        // the same speed as on real hardware.
+        Contention = new SpectrumContentionModel(Memory);
+        Cpu.Contention = Contention;
         if (model == SpectrumModel.OneTwentyEight)
         {
             Ay = new Ay8912();
@@ -57,8 +79,97 @@ public sealed class SpectrumMachine : IIoBus
     {
         Cpu.RequestInterrupt();
         long target = Cpu.TStates + TStatesPerFrame;
-        while (Cpu.TStates < target) Cpu.Step();
+        while (Cpu.TStates < target) StepOnce();
         FrameCount++;
+    }
+
+    /// <summary>
+    /// Runs one CPU instruction, or intercepts a fast-load trap first. Public
+    /// so tests can drive a single step without needing a whole frame budget.
+    /// </summary>
+    public int StepOnce()
+    {
+        if (FastLoad
+            && Cpu.PC == 0x0556
+            && Tape != null && Tape.IsPlaying
+            && IsSpectrum48LdBytes())
+        {
+            return HandleFastLoadTrap();
+        }
+        return Cpu.Step();
+    }
+
+    private bool IsSpectrum48LdBytes()
+    {
+        for (int i = 0; i < LdBytesSig.Length; i++)
+            if (Memory.Read((ushort)(0x0556 + i)) != LdBytesSig[i]) return false;
+        return true;
+    }
+
+    // Simulate the 48K LD-BYTES routine. On entry:
+    //   AF' : A' = expected flag, F' CF = 1 LOAD / 0 VERIFY
+    //   IX  : destination in RAM
+    //   DE  : payload length (bytes between flag and checksum)
+    // On exit (via popped RET address):
+    //   CF = 1  loaded/verified OK
+    //   CF = 0  wrong flag, short block, or bad checksum
+    private int HandleFastLoadTrap()
+    {
+        long tStart = Cpu.TStates;
+        byte expectedFlag = (byte)(Cpu.AF_ >> 8);
+        ushort dest = Cpu.IX;
+        ushort remaining = Cpu.DE;
+
+        if (!Tape!.TryReadNextBlock(out byte flag, out ReadOnlySpan<byte> payload, out byte checksum))
+        {
+            SetCarry(false); PopReturn();
+            return (int)(Cpu.TStates - tStart);
+        }
+        if (flag != expectedFlag)
+        {
+            SetCarry(false); PopReturn();
+            return (int)(Cpu.TStates - tStart);
+        }
+
+        // Copy min(DE, payload.Length) bytes into memory, and XOR the whole
+        // block for checksum verification the way LD-BYTES does — the ROM
+        // continues clocking bytes past DE=0 for the sole purpose of getting
+        // to the checksum. Undershoot (DE > payload.Length) is a short-block
+        // failure: the real ROM would time out mid-byte.
+        int toCopy = Math.Min(remaining, payload.Length);
+        byte chk = flag;
+        for (int i = 0; i < toCopy; i++)
+        {
+            Memory.Write((ushort)(dest + i), payload[i]);
+            chk ^= payload[i];
+        }
+        for (int i = toCopy; i < payload.Length; i++) chk ^= payload[i];
+
+        Cpu.IX = (ushort)(dest + toCopy);
+        Cpu.DE = (ushort)(remaining - toCopy);
+        bool ok = (chk == checksum) && (remaining <= payload.Length);
+        SetCarry(ok);
+
+        // A real 48K load runs at ~44 T-states per data bit averaged with
+        // pilot/sync overhead — call it ~44 T/byte over the whole block so
+        // things timed off the tape don't leap forward instantly.
+        Cpu.TStates += (payload.Length + 2) * 44L;
+
+        PopReturn();
+        return (int)(Cpu.TStates - tStart);
+    }
+
+    private void SetCarry(bool c)
+    {
+        Cpu.F = (byte)(c ? (Cpu.F | Z80.FlagC) : (Cpu.F & ~Z80.FlagC));
+    }
+
+    private void PopReturn()
+    {
+        byte lo = Memory.Read(Cpu.SP);
+        byte hi = Memory.Read((ushort)(Cpu.SP + 1));
+        Cpu.SP += 2;
+        Cpu.PC = (ushort)((hi << 8) | lo);
     }
 
     // ---- IIoBus dispatch --------------------------------------------------

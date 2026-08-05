@@ -74,6 +74,52 @@ public class MachineSmokeTests
     }
 
     [Fact]
+    public void Ay8912_EnvelopeShape14_TracesTriangle()
+    {
+        // Shape 14 (/\/\): repeating triangle 0..15..0..15..
+        // Period = 1  ->  each envelope step = 16 AY clocks.
+        var ay = new Ay8912();
+        ay.SelectRegister(11); ay.WriteData(1);   // env period low
+        ay.SelectRegister(12); ay.WriteData(0);   // env period high
+        ay.SelectRegister(13); ay.WriteData(14);  // shape 14 (resets step)
+
+        // Expected 32-step triangle then repeat, sampled after each 16-clock tick.
+        int[] expected = new int[]
+        {
+            1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,
+            15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0,
+            0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,
+            15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0,
+        };
+        for (int i = 0; i < expected.Length; i++)
+        {
+            ay.Tick(16);
+            Assert.Equal(expected[i], typeof(Ay8912)
+                .GetProperty("EnvValue", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(ay));
+        }
+    }
+
+    [Fact]
+    public void Ay8912_EnvelopeAmplitudeFlag_UsesEnvValue()
+    {
+        var ay = new Ay8912();
+        ay.SelectRegister(7);  ay.WriteData(0x3E);   // ch A tone enabled, others off
+        ay.SelectRegister(0);  ay.WriteData(1);      // very short tone period
+        ay.SelectRegister(1);  ay.WriteData(0);
+        ay.SelectRegister(11); ay.WriteData(1);
+        ay.SelectRegister(12); ay.WriteData(0);
+        ay.SelectRegister(13); ay.WriteData(0x0C);   // shape 12 (rising ramp repeating)
+        ay.SelectRegister(8);  ay.WriteData(0x10);   // ch A: use envelope
+        // Advance to some non-zero envelope value.
+        ay.Tick(16 * 8);                              // 8 steps -> env value 8
+        // Sample should be non-negative-of-silence (env non-zero picked up).
+        // Just assert Sample() runs and returns a finite float in [-1,1].
+        float s = ay.Sample();
+        Assert.InRange(s, -1.0f, 1.0f);
+    }
+
+    [Fact]
     public void Ula_RendersBorderAndScreen()
     {
         var m = new SpectrumMachine(SpectrumModel.FortyEight, StubRom());

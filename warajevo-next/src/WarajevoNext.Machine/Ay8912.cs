@@ -20,6 +20,11 @@ public sealed class Ay8912
     private int _noiseCounter;
     private uint _noiseLfsr = 1;
     private bool _noiseOn;
+
+    // Envelope generator: counter accumulates AY clocks; each step is 16 AY
+    // clocks * envelope period. _envStep is 0..31 within a 32-step ramp (two
+    // 16-level halves so alternate/hold combinations work naturally); _envValue
+    // is the current 0..15 amplitude derived from the selected shape.
     private int _envCounter;
     private int _envStep;
     private int _envValue;
@@ -31,10 +36,14 @@ public sealed class Ay8912
     public void WriteData(byte v)
     {
         _reg[_selected] = v;
-        if (_selected == 13) { _envStep = 0; _envValue = 0; _envCounter = 0; }
+        if (_selected == 13) { _envStep = 0; _envCounter = 0; _envValue = EnvSample(_reg[13] & 0x0F, 0); }
     }
 
     public byte GetRegister(int i) => _reg[i & 0x0F];
+
+    // Expose envelope state to tests without going through Sample().
+    internal int EnvValue => _envValue;
+    internal int EnvStep => _envStep;
 
     /// <summary>Advance the AY state by <paramref name="cycles"/> AY clocks
     /// (AY clock = CPU clock / 2 on 128K).</summary>
@@ -56,6 +65,7 @@ public sealed class Ay8912
             _noiseLfsr = (_noiseLfsr >> 1) | (bit << 16);
             _noiseOn = (_noiseLfsr & 1) != 0;
         }
+        StepEnvelope(cycles);
     }
 
     private void StepTone(int ch, int period, int cycles)
@@ -69,6 +79,60 @@ public sealed class Ay8912
         }
     }
 
+    private void StepEnvelope(int cycles)
+    {
+        int period = _reg[11] | (_reg[12] << 8);
+        if (period == 0) period = 1;
+        _envCounter += cycles;
+        int tick = period * 16;
+        int shape = _reg[13] & 0x0F;
+        while (_envCounter >= tick)
+        {
+            _envCounter -= tick;
+            _envStep++;
+            _envValue = EnvSample(shape, _envStep);
+        }
+    }
+
+    // AY-3-8910 envelope shape lookup.  The datasheet defines four control bits
+    // in R13: b3=Continue, b2=Attack, b1=Alternate, b0=Hold.  All eight shapes
+    // where Continue=0 (0..7) collapse to a single \-shaped decay that then
+    // holds at 0.  For Continue=1 (8..15) the eight distinct waveforms emerge.
+    // We model a 32-step ramp: the first 16 steps are the "primary" half
+    // (attack -> 0..15, no-attack -> 15..0); after step 15 the Hold/Alternate/
+    // Continue combination decides whether we stay, invert, or repeat.
+    private static int EnvSample(int shape, int step)
+    {
+        bool cont = (shape & 0x08) != 0;
+        bool attack = (shape & 0x04) != 0;
+        bool alt = (shape & 0x02) != 0;
+        bool hold = (shape & 0x01) != 0;
+
+        // Non-continue shapes: one primary ramp then hold at 0 forever.
+        if (!cont)
+        {
+            if (step < 16) return attack ? step : 15 - step;
+            return 0;
+        }
+
+        // Continue = 1.  Past step 15 either hold at the terminal value or
+        // start repeating, with Alternate flipping every other 16-step pass.
+        if (step >= 16 && hold)
+        {
+            // attack XOR alt selects which rail we settle on.
+            return (attack ^ alt) ? 15 : 0;
+        }
+
+        // Repeat forever (with optional alternation).  Fold the step into a
+        // 32-step super-cycle when alternating, 16 when not.
+        int mod = alt ? 32 : 16;
+        int s2 = step & (mod - 1);
+        int pos = s2 & 0x0F;
+        bool secondPass = (s2 & 0x10) != 0;         // only meaningful when alt
+        bool up = attack ^ secondPass;              // invert direction on alt's odd pass
+        return up ? pos : 15 - pos;
+    }
+
     /// <summary>Compute a single mixed sample in [-1, 1] range.</summary>
     public float Sample()
     {
@@ -80,7 +144,8 @@ public sealed class Ay8912
             bool noiseEnable = ((mixer >> (ch + 3)) & 1) == 0;
             bool level = (toneEnable && _toneOn[ch]) || (noiseEnable && _noiseOn);
             if (!toneEnable && !noiseEnable) level = true; // when both disabled -> DC
-            int vol = _reg[8 + ch] & 0x0F;
+            byte volReg = _reg[8 + ch];
+            int vol = (volReg & 0x10) != 0 ? _envValue : (volReg & 0x0F);
             float amp = level ? (vol / 15.0f) : 0.0f;
             s += amp;
         }

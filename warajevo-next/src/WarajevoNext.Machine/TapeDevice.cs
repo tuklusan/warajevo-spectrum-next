@@ -142,4 +142,34 @@ public sealed class TapeDevice
         int bit = (_tap![_dataPtr] >> _bitPtr) & 1;
         _pulseTicks = bit == 1 ? Bit1T : Bit0T;
     }
+
+    // ------------------------------------------------------------------
+    // Fast-load support. The 0x0556 ROM trap calls this to grab the next
+    // block ready for direct memory copy, bypassing the edge machinery.
+    // Layout of one TAP block: [len-lo][len-hi][flag][data...][xor].
+    //   `flag`     - first byte of the block (0x00 header, 0xFF data)
+    //   `payload`  - the bytes between the flag and the trailing XOR
+    //                (this is exactly what the ROM would deposit in RAM)
+    //   `checksum` - the trailing XOR byte; the block is valid when
+    //                (flag XOR all-payload) == checksum.
+    // On success the block pointer advances past this block; IsPlaying
+    // clears when the tape is exhausted.
+    // ------------------------------------------------------------------
+    public bool TryReadNextBlock(out byte flag, out ReadOnlySpan<byte> payload, out byte checksum)
+    {
+        flag = 0; payload = default; checksum = 0;
+        if (_tap == null) return false;
+        if (_blockPtr + 2 > _tap.Length) return false;
+        int len = _tap[_blockPtr] | (_tap[_blockPtr + 1] << 8);
+        if (len < 2) return false;                     // need at least flag+checksum
+        int start = _blockPtr + 2;
+        if (start + len > _tap.Length) return false;   // truncated block
+        flag = _tap[start];
+        checksum = _tap[start + len - 1];
+        payload = new ReadOnlySpan<byte>(_tap, start + 1, len - 2);
+        _blockPtr += 2 + len;
+        CurrentBlock++;
+        if (_blockPtr >= _tap.Length) { IsPlaying = false; _state = State.Idle; }
+        return true;
+    }
 }

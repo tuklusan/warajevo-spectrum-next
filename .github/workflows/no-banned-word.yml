@@ -1,0 +1,71 @@
+# Hard gate: fail any push (or PR) whose payload contains the banned word.
+# Companion to the server-side push ruleset that blocks the same word in
+# commit messages, author/committer emails, and branch names.
+#
+# We scan the *tracked file content* of every commit in the pushed range,
+# case-insensitively, and also re-check commit metadata as a belt-and-braces.
+# The GPL LICENSE file is intentionally not exempted -- the licence text
+# does not contain the banned word.
+name: no-banned-word
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan pushed commits + working tree for banned word
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Case-insensitive regex; bracket-form is portable across grep/git.
+          PATTERN='[Cc][Ll][Aa][Uu][Dd][Ee]'
+
+          # 1) Working-tree scan across all tracked files.
+          echo "--- Working-tree scan ---"
+          if git grep -InE "$PATTERN" -- ':(exclude).github/workflows/no-banned-word.yml'; then
+            echo "::error::Banned word found in tracked files (see matches above)."
+            exit 1
+          fi
+
+          # 2) Commit-metadata scan across the pushed range.
+          # On push events: from event before -> after. On PR: base -> head.
+          BEFORE="${{ github.event.before || github.event.pull_request.base.sha }}"
+          AFTER="${{  github.event.after  || github.event.pull_request.head.sha }}"
+          if [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            RANGE="$BEFORE..$AFTER"
+          else
+            # New branch or shallow: scan the last 50 commits ending at AFTER.
+            RANGE="$(git rev-list --max-count=50 "$AFTER" | tail -n 1)..$AFTER"
+          fi
+          echo "--- Commit metadata scan across $RANGE ---"
+          BAD=$(git log --format='%H%n%s%n%b%n%an <%ae>%n%cn <%ce>' "$RANGE" | grep -InE "$PATTERN" || true)
+          if [ -n "$BAD" ]; then
+            echo "$BAD"
+            echo "::error::Banned word found in commit metadata."
+            exit 1
+          fi
+
+          # 3) Diff scan across the range (catches added lines even if the
+          # working tree scan above missed a rename/renamed content).
+          echo "--- Diff scan across $RANGE ---"
+          BAD_DIFF=$(git log -p --format='commit %H' "$RANGE" | grep -InE "^\\+.*$PATTERN" || true)
+          if [ -n "$BAD_DIFF" ]; then
+            echo "$BAD_DIFF"
+            echo "::error::Banned word introduced by a commit in the pushed range."
+            exit 1
+          fi
+
+          echo "OK: no banned-word occurrences."

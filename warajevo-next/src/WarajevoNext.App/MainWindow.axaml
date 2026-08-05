@@ -1,0 +1,30 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="WarajevoNext.App.MainWindow"
+        Width="960" Height="800"
+        Title="Warajevo Next — ZX Spectrum emulator (48K / 128K)">
+  <DockPanel LastChildFill="True">
+    <Menu DockPanel.Dock="Top">
+      <MenuItem Header="_File">
+        <MenuItem Header="Open _Snapshot..." Name="OpenSnapshotItem"/>
+        <MenuItem Header="Open _Tape..."     Name="OpenTapeItem"/>
+        <Separator/>
+        <MenuItem Header="Load ROM..."       Name="LoadRomItem"/>
+        <Separator/>
+        <MenuItem Header="E_xit"             Name="ExitItem"/>
+      </MenuItem>
+      <MenuItem Header="_Machine">
+        <MenuItem Header="_Reset"            Name="ResetItem"/>
+        <MenuItem Header="_Pause"            Name="PauseItem"/>
+        <Separator/>
+        <MenuItem Header="Spectrum _48K"     Name="Sel48Item"/>
+        <MenuItem Header="Spectrum _128K"    Name="Sel128Item"/>
+      </MenuItem>
+      <MenuItem Header="_Help">
+        <MenuItem Header="_About"            Name="AboutItem"/>
+      </MenuItem>
+    </Menu>
+    <TextBlock DockPanel.Dock="Bottom" Name="StatusBar" Margin="6,2" Text="Idle."/>
+    <Image Name="ScreenImage" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+  </DockPanel>
+</Window>

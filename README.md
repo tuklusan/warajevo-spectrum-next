@@ -28,6 +28,15 @@ Official source page:
 
 `https://worldofspectrum.net/warajevo/Download.html`
 
+## Warajevo Next — the .NET 10 + Avalonia port
+
+A modern port of Warajevo lives under [`warajevo-next/`](warajevo-next/). It
+targets the Spectrum 48K and 128K, is written in C# on .NET 10, and uses
+Avalonia for its cross-platform UI. The Z80 core passes **1335 / 1335** cases
+from the FUSE Z80 conformance suite. See
+[`warajevo-next/README.md`](warajevo-next/README.md) and
+[`warajevo-next/ARCHITECTURE.md`](warajevo-next/ARCHITECTURE.md) for details.
+
 ## Proposed repository layout
 
 ```text

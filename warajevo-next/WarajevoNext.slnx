@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="src/WarajevoNext.Cpu/WarajevoNext.Cpu.csproj" />
+  <Project Path="src/WarajevoNext.Machine/WarajevoNext.Machine.csproj" />
+  <Project Path="src/WarajevoNext.App/WarajevoNext.App.csproj" />
+  <Project Path="tests/WarajevoNext.Cpu.Tests/WarajevoNext.Cpu.Tests.csproj" />
+  <Project Path="tests/WarajevoNext.Machine.Tests/WarajevoNext.Machine.Tests.csproj" />
+</Solution>

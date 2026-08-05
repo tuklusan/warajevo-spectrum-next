@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>WarajevoNext.Cpu.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="coverlet.collector" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\WarajevoNext.Cpu\WarajevoNext.Cpu.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="FuseTests\tests.in" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="FuseTests\tests.expected" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

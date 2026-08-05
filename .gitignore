@@ -23,3 +23,7 @@ Thumbs.db
 /tapes/spectrum-128k/*.tap
 /tapes/spectrum-128k/*.TZX
 /tapes/spectrum-128k/*.tzx
+
+# .NET build output (warajevo-next port)
+**/bin/
+**/obj/

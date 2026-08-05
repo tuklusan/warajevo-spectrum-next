@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>WarajevoNext.Cpu</RootNamespace>
+    <AssemblyName>WarajevoNext.Cpu</AssemblyName>
+  </PropertyGroup>
+</Project>

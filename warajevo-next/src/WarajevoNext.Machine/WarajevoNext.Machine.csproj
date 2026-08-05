@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>WarajevoNext.Machine</RootNamespace>
+    <AssemblyName>WarajevoNext.Machine</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\WarajevoNext.Cpu\WarajevoNext.Cpu.csproj" />
+  </ItemGroup>
+</Project>

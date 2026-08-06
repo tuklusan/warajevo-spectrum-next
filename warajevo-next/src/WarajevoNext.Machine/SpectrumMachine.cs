@@ -114,23 +114,22 @@ public sealed class SpectrumMachine : IIoBus
     /// </summary>
     public int StepOnce()
     {
+        // Trace-time PC probe in the ROM tape-load range so we can watch
+        // where the ROM actually spins when things break.
+        if (TraceLog.Enabled && Cpu.PC >= 0x0550 && Cpu.PC < 0x0610)
+        {
+            _romPcVisits++;
+            if ((_romPcVisits & 0x3FF) == 0)  // 1 line per 1024 hits
+                TraceLog.Log($"[rom.pc] pc=0x{Cpu.PC:X4} b=0x{Cpu.B:X2} c=0x{Cpu.C:X2} hl=0x{Cpu.HL:X4} af=0x{Cpu.AF:X4} sp=0x{Cpu.SP:X4} t={Cpu.TStates} visits={_romPcVisits}");
+        }
         if (Tape != null && Tape.IsPlaying)
         {
             if (Cpu.PC == 0x0556 && IsSpectrum48LdBytes())
             {
                 if (FastLoad) return HandleFastLoadTrap();
-                // Normal-load: reset the LD-EDGE state machine so the trap
-                // starts fresh on this block, and let ROM enter LD-BYTES.
+                TraceLog.Log($"[ld-bytes.enter] pc=0x0556 t={Cpu.TStates} FastLoad=off - resetting edge machine");
                 Tape.ResetEdgeMachine();
             }
-            // Warajevo-style trap fires on the IN A,(FE) INSIDE LD-EDGE-1
-            // (ROM 0x05F1), NOT on LD-EDGE-1's entry. Warajevo's Z80.ASM
-            // INAN handler (line 4581+) sniffs every IN A,(n=254) and if
-            // the surrounding ROM bytes match LD-EDGE's polling pattern,
-            // it sets B via the state machine, sets EDGE_AFTER=PC+8, and
-            // resumes execution after the AND 20 / JR Z loop. ROM's own
-            // OUT (FE),A at 0x0601 then toggles the border colour and
-            // 0x0603 SCF / 0x0604 RET returns success to LD-BYTES.
             else if (!FastLoad && Cpu.PC == 0x05F1 && IsSpectrum48LdEdgePoll())
             {
                 return HandleLdEdgePollTrap();
@@ -138,6 +137,8 @@ public sealed class SpectrumMachine : IIoBus
         }
         return Cpu.Step();
     }
+
+    private long _romPcVisits;
 
     // Sinclair 48K ROM at LD-EDGE-1 polling IN (0x05F1..0x05F9):
     //   05F1: DB FE       IN A,(FEh)
@@ -169,27 +170,19 @@ public sealed class SpectrumMachine : IIoBus
     {
         _ldEdgeTrapFires++;
         long tStart = Cpu.TStates;
+        byte pcBeforeB = Cpu.B;
         if (!Tape!.TryHandleLdEdgeTrap(out bool setB, out byte bReturn, out _))
         {
-            // End of tape / EDGE_BAD. Let ROM's RET NC at 0x05F4 fall
-            // through by clearing CF and jumping PC past the poll loop -
-            // but with A having bit 0 = 0 so RRA leaves CF=0 and RET NC
-            // returns to caller with failure.
+            TraceLog.Log($"[ld-edge.fail#{_ldEdgeTrapFires}] pc=0x05F1 b=0x{Cpu.B:X2} c=0x{Cpu.C:X2} t={Cpu.TStates} - end of tape or bad block");
             Cpu.A = 0;
             Cpu.PC = 0x05F3;   // fall through RRA / RET NC = failure
             return (int)(Cpu.TStates - tStart);
         }
-        if (setB) Cpu.B = bReturn;   // Warajevo LEADER/BITS: mov B,255
-        // Warajevo Z80.ASM line 4624-4625: EDGE_AFTER = PC + 8.
-        // At PC=0x05F1, PC+8 = 0x05F9. The DEC-and-jump-to-NOP trick
-        // in Warajevo effectively advances one more to 0x05FA. Skip
-        // straight there.
-        Cpu.PC = 0x05FA;
-        // Set A up so ROM's post-poll code produces a sensible edge.
-        // At 0x05FA ROM does: LD A,C / CPL / LD C,A / AND 07 / OR 08 /
-        // OUT (FE),A / SCF / RET. This toggles border and RETurns
-        // success. We don't need to modify anything else.
+        if (setB) Cpu.B = bReturn;
+        Cpu.PC = 0x05FA;       // Warajevo EDGE_AFTER = PC + 8 (+1 for NOP trick)
         Cpu.TStates += 200L;
+        if (_ldEdgeTrapFires <= 20 || (_ldEdgeTrapFires & 0xFF) == 0)
+            TraceLog.Log($"[ld-edge#{_ldEdgeTrapFires}] pc-was=0x05F1 pc-now=0x05FA setB={setB} bWas=0x{pcBeforeB:X2} bNow=0x{Cpu.B:X2} c=0x{Cpu.C:X2} sp=0x{Cpu.SP:X4} t={Cpu.TStates} tape={Tape.StateName}");
         return (int)(Cpu.TStates - tStart);
     }
 

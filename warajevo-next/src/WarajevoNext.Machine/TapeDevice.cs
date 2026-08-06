@@ -26,7 +26,7 @@ public sealed class TapeDevice
     private bool _pulseHigh;
     private State _state;
     private long _cpuCounter;
-    private enum State { Idle, PilotPulse, Sync1, Sync2, DataPulse1, DataPulse2 }
+    private enum State { Idle, PilotPulse, Sync1, Sync2, DataPulse1, DataPulse2, InterBlockGap }
 
     // Standard timings (T-states @ 3.5 MHz)
     private const int PilotPulseT = 2168;
@@ -37,6 +37,11 @@ public sealed class TapeDevice
     private const int Bit0T = 855;
     private const int Bit1T = 1710;
     private const int TailT = 945;
+    // 1-second silence between tape blocks so the ROM's LOAD "" can finish
+    // processing block N (print "Program: name", allocate buffers, ...) before
+    // block N+1's pilot arrives. Real cassettes usually have ~1-2 seconds
+    // of silence here. Without this gap the tape ran past the ROM.
+    private const int InterBlockGapT = 3500000;
 
     private int _pilotPulsesLeft;
 
@@ -128,15 +133,22 @@ public sealed class TapeDevice
                 if (_bitPtr < 0) { _bitPtr = 7; _dataPtr++; }
                 if (_dataPtr - _blockPtr - 2 >= _blockLen)
                 {
-                    // End of block; move to next
+                    // End of block; move to inter-block gap, THEN start next
                     _blockPtr += 2 + _blockLen;
                     CurrentBlock++;
                     if (_blockPtr >= (_tap?.Length ?? 0)) { IsPlaying = false; _state = State.Idle; return; }
-                    _state = State.Idle;
-                    _pulseTicks = TailT;
-                    StartBlock();
+                    _state = State.InterBlockGap;
+                    _pulseTicks = InterBlockGapT;
+                    // Hold the EAR line low during silence so any polling
+                    // loop reads "no signal" rather than a stuck-high edge.
+                    _pulseHigh = false;
                 }
                 else { _state = State.DataPulse1; SetBitTime(); }
+                break;
+            case State.InterBlockGap:
+                // Gap timed out - now really start the next block's pilot.
+                _state = State.Idle;
+                StartBlock();
                 break;
             case State.Idle:
                 _pulseTicks = 1000; break;

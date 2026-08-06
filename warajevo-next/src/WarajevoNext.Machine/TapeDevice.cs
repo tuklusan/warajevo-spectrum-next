@@ -77,109 +77,143 @@ public sealed class TapeDevice
 
     /// <summary>
     /// Called by SpectrumMachine when PC lands on ROM 0x05E7 (LD-EDGE-1).
-    /// Advances the Warajevo-style edge state machine one step and fills
-    /// out (bReturn, borderColour, ok). SpectrumMachine then writes B into
-    /// Cpu.B, OUTs the border colour to port 0xFE, sets CF, and pops the
-    /// return address so LD-EDGE-1's body never runs.
+    /// LITERAL port of Warajevo 2.50 TAPE.ASM LEADER / SYNC / BITS state
+    /// machine (lines 1901-1937). Semantics:
+    ///   setB=true  -> caller writes bReturn into Cpu.B (Warajevo mov B,255)
+    ///   setB=false -> Cpu.B UNCHANGED (Warajevo leaves B as whatever the
+    ///                 caller of LD-EDGE-1 set it to)
     /// </summary>
-    public bool TryHandleLdEdgeTrap(out byte bReturn, out byte borderColour)
+    public bool TryHandleLdEdgeTrap(out bool setB, out byte bReturn, out byte borderColour)
     {
-        bReturn = 0xFF;
-        borderColour = 0x02;  // pilot/leader stripe = red
+        setB = false; bReturn = 0xFF; borderColour = 0x02;
         if (_tap == null) return false;
 
         switch (_edgePhase)
         {
             case EdgePhase.Prep:
-                // Bind onto the current block's parameters. Skips the block
-                // header check; SpectrumMachine.StepOnce only invokes the
-                // trap when Tape.IsPlaying, which itself requires a loaded
-                // TAP with at least one block.
-                if (_blockPtr + 2 > _tap.Length) return false;
+                // Warajevo TAPE.ASM ED_PREP (line 1996): open next block,
+                // set EDGE_CNT from CUR_FLAG bit 7 (header vs data), move
+                // state to LEADER. GETTAPE line 1587 sets EDGE_CNT=8064
+                // for header (flag<0x80) or 3220 for data (flag>=0x80).
+                if (_blockPtr + 2 > _tap.Length) { setB = false; borderColour = 0; return false; }
                 _blockLen = _tap[_blockPtr] | (_tap[_blockPtr + 1] << 8);
                 if (_blockLen < 2) return false;
-                _edgeDataPtr = _blockPtr + 2;                 // includes flag byte
-                _edgeDataEnd = _edgeDataPtr + _blockLen;      // includes checksum
+                _edgeDataPtr = _blockPtr + 2;
+                _edgeDataEnd = _edgeDataPtr + _blockLen;
                 byte flag = _tap[_edgeDataPtr];
-                // Header = 8064 pilot edges, data = 3220 (per Warajevo TAPE.ASM
-                // GETTAPE, line 1587). Two ROM samples per edge - one on each
-                // half-cycle - so an EDGE count of 8064 gives ROM 4032 leader
-                // "pulses" to lock onto, comfortably above the 256-pulse
-                // minimum in Sinclair FAQ.
                 _edgeCnt = flag < 0x80 ? 8064 : 3220;
                 _edgePhase = EdgePhase.Leader;
-                _edgeBitSide = 0;
-                _lastEdgeB = 0xFF;
-                bReturn = 0xFF;
-                borderColour = 0x02;
-                return true;
+                // Fall through to Leader for this call.
+                goto case EdgePhase.Leader;
 
             case EdgePhase.Leader:
-                bReturn = 0xFF;               // long pulse -> ROM reads as pilot
-                borderColour = (_edgeCnt & 1) != 0 ? (byte)0x02 : (byte)0x05;  // red / cyan stripe
+                // Warajevo LEADER (line 1901):
+                //   mov B,255              ; set B for caller
+                //   mov LDCNT,30           ; (not modelled - we don't count polling ticks)
+                //   dec EDGE_CNT
+                //   jnz LEADEND
+                //   mov EDGE_CNT,2
+                //   mov EDGE_ADDR,offset SYNC
+                // LEADEND: jmp EDGE_OK
+                setB = true; bReturn = 0xFF;
+                borderColour = (_edgeCnt & 1) != 0 ? (byte)0x02 : (byte)0x05;  // red/cyan pilot stripe
                 _edgeCnt--;
                 if (_edgeCnt <= 0)
                 {
-                    _edgePhase = EdgePhase.Sync;
                     _edgeCnt = 2;
+                    _edgePhase = EdgePhase.Sync;
                 }
-                _lastEdgeB = bReturn;
                 return true;
 
             case EdgePhase.Sync:
-                // Two short sync edges - report as a "not-a-pilot" value so
-                // ROM's leader-count loop exits and moves to data mode.
-                bReturn = 0x80;
+                // Warajevo SYNC (line 1909):
+                //   mov LDCNT,10
+                //   dec EDGE_CNT
+                //   jnz EDGE_OK           ; B unchanged
+                //   mov EDGE_ADDR,offset BITS
+                //   mov EDGE_TYP,0
+                //   mov EDGE_PTR,0
+                //   jmp EDGE_OK           ; B unchanged
+                setB = false;                                       // Warajevo does NOT touch B in sync
                 borderColour = (_edgeCnt & 1) != 0 ? (byte)0x02 : (byte)0x05;
                 _edgeCnt--;
                 if (_edgeCnt <= 0)
                 {
                     _edgePhase = EdgePhase.Bits;
-                    _edgeBitCnt = 0;
-                    _edgeBitSide = 0;
+                    _edgeBitSide = 0;   // Warajevo EDGE_TYP=0
+                    _edgeBitCnt = 0;    // will trigger byte fetch on first BITS call
                 }
-                _lastEdgeB = bReturn;
                 return true;
 
             case EdgePhase.Bits:
-                // Two edges per bit - first edge = "arrives", second = "settles".
-                // Report B based on the CURRENT bit; ROM compares B to a
-                // threshold to distinguish bit 0 (short pulse) from bit 1
-                // (long pulse).
+                // Warajevo BITS (line 1917):
+                //   mov LDCNT,10
+                //   xor EDGE_TYP,255       ; toggle 0<->255
+                //   jnz EDGE_OK            ; first edge of a bit: B unchanged
+                //   ; second edge:
+                //   cmp EDGE_CNT,0
+                //   jnz EDGE_NEXT          ; still bits in current byte
+                //   dec EDGE_LEN
+                //   cmp EDGE_LEN,-1
+                //   je EDGE_BAD            ; end of block
+                //   mov EDGE_BYT, [buf++]  ; fetch next byte
+                //   mov EDGE_CNT,8
+                // EDGE_NEXT:
+                //   dec EDGE_CNT
+                //   shl EDGE_BYT,1         ; extract top bit into CF
+                //   jnc EDGE_OK            ; bit 0: B unchanged
+                //   mov B,255              ; bit 1: set B=255
+                _edgeBitSide ^= 1;   // XOR EDGE_TYP,255 (toggles 0<->1)
+                if (_edgeBitSide != 0)
+                {
+                    // First edge of a bit: don't touch B, don't process a bit.
+                    setB = false;
+                    borderColour = 0x06;  // yellow (data first edge)
+                    return true;
+                }
+                // Second edge: process the next bit.
                 if (_edgeBitCnt == 0)
                 {
                     if (_edgeDataPtr >= _edgeDataEnd)
                     {
-                        // End of block. Move on to next block or done.
-                        _edgePhase = EdgePhase.Done;
+                        // EDGE_BAD equivalent: end of block. Advance to
+                        // next block or stop tape.
                         _blockPtr = _edgeDataEnd;
                         CurrentBlock++;
-                        if (_blockPtr >= _tap.Length) { IsPlaying = false; }
-                        else _edgePhase = EdgePhase.Prep;
-                        bReturn = 0x80; borderColour = 0x00;
-                        _lastEdgeB = bReturn;
+                        if (_blockPtr >= _tap.Length)
+                        {
+                            IsPlaying = false;
+                            _edgePhase = EdgePhase.Done;
+                            setB = false; borderColour = 0;
+                            return true;
+                        }
+                        _edgePhase = EdgePhase.Prep;
+                        // Re-enter Prep on next call. For THIS call, mimic
+                        // Warajevo EDGE_BAD: leave B alone, exit.
+                        setB = false; borderColour = 0;
                         return true;
                     }
                     _edgeByte = _tap[_edgeDataPtr++];
                     _edgeBitCnt = 8;
-                    _edgeBitSide = 0;
                 }
-                // Extract top bit of current byte.
+                // EDGE_NEXT: shl EDGE_BYT,1 - top bit goes into CF.
                 bool bit = (_edgeByte & 0x80) != 0;
-                bReturn = bit ? (byte)0xFF : (byte)0x80;
-                borderColour = bit ? (byte)0x06 : (byte)0x01;   // yellow / blue data stripe
-                _edgeBitSide ^= 1;
-                if (_edgeBitSide == 0)
+                _edgeByte = (byte)(_edgeByte << 1);
+                _edgeBitCnt--;
+                if (bit)
                 {
-                    // Both halves of this bit reported - shift to next.
-                    _edgeByte = (byte)(_edgeByte << 1);
-                    _edgeBitCnt--;
+                    setB = true; bReturn = 0xFF;    // mov B,255
+                    borderColour = 0x01;             // blue (bit 1)
                 }
-                _lastEdgeB = bReturn;
+                else
+                {
+                    setB = false;                    // B unchanged
+                    borderColour = 0x00;             // black (bit 0)
+                }
                 return true;
 
             case EdgePhase.Done:
-                bReturn = 0; borderColour = 0;
+                setB = false; bReturn = 0; borderColour = 0;
                 return false;
         }
         return false;

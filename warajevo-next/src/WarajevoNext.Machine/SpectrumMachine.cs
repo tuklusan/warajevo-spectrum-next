@@ -169,26 +169,23 @@ public sealed class SpectrumMachine : IIoBus
     private int HandleLdEdgeTrap()
     {
         long tStart = Cpu.TStates;
-        if (!Tape!.TryHandleLdEdgeTrap(out byte bReturn, out byte borderColour))
+        if (!Tape!.TryHandleLdEdgeTrap(out bool setB, out byte bReturn, out byte borderColour))
         {
-            // No more edges - report failure so ROM times out gracefully.
-            Cpu.B = 0;
+            // End of tape - report failure. Warajevo TAPE.ASM EDGE_BAD.
             SetCarry(false);
             PopReturn();
             return (int)(Cpu.TStates - tStart);
         }
-        // Update border with the requested colour (produces classic stripes).
         int frameT = (int)(Cpu.TStates - _frameStartT);
         if (frameT < 0) frameT = 0;
         Ula.RecordBorderAt(frameT, borderColour);
         Ula.Out(0x00FE, borderColour);
-        // Charge ROM-realistic time for this edge so the tape and CPU
-        // stay in step. Real LD-EDGE-1 takes ~200 T-states on a short
-        // pulse, ~2200 on a long pilot pulse; use a middle value that
-        // preserves the ~50 Hz frame illusion.
+        // Charge some T-states so the CPU counter advances - keeps the
+        // frame at roughly 50 Hz visually. Exact value doesn't matter
+        // because the trap short-circuits ROM's real edge-count loop.
         Cpu.TStates += 200L;
-        Cpu.B = bReturn;
-        SetCarry(true);
+        if (setB) Cpu.B = bReturn;         // Warajevo: only set B when the state machine says so
+        SetCarry(true);                     // ROM's LD-EDGE-1 ends with SCF/RET (0x0603/0x0604)
         PopReturn();
         return (int)(Cpu.TStates - tStart);
     }

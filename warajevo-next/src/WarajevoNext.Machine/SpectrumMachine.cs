@@ -66,10 +66,17 @@ public sealed class SpectrumMachine : IIoBus
         {
             Ay = new Ay8912();
             TStatesPerFrame = 70908;
+            Ula.TStatesPerLine = 228;
+            // 128K interrupt fires ~14361 T-states before the first visible
+            // screen line; our rendered top border is 32 of the 48 real
+            // top-border lines, so its T=0 sits 32 * 228 T-states earlier.
+            Ula.FirstBorderT = 14361 - 32 * 228;
         }
         else
         {
             TStatesPerFrame = 69888;
+            Ula.TStatesPerLine = 224;
+            Ula.FirstBorderT = 14335 - 32 * 224;
         }
     }
 
@@ -85,6 +92,7 @@ public sealed class SpectrumMachine : IIoBus
     public void RunFrame()
     {
         Cpu.RequestInterrupt();
+        _frameStartT = Cpu.TStates;
         long target = Cpu.TStates + TStatesPerFrame;
         long prev = Cpu.TStates;
         while (Cpu.TStates < target)
@@ -253,9 +261,20 @@ public sealed class SpectrumMachine : IIoBus
         return 0xFF;
     }
 
+    // Anchors the current frame's T-state 0 so we can hand Ula a frame-local
+    // T-state on every OUT 0xFE (needed for per-scanline border stripes).
+    private long _frameStartT;
+
     public void Out(ushort port, byte value)
     {
-        if ((port & 1) == 0) { Ula.Out(port, value); return; }
+        if ((port & 1) == 0)
+        {
+            int frameT = (int)(Cpu.TStates - _frameStartT);
+            if (frameT < 0) frameT = 0;
+            Ula.RecordBorderAt(frameT, value);
+            Ula.Out(port, value);
+            return;
+        }
         if (Memory.Model == SpectrumModel.OneTwentyEight)
         {
             // 128K memory / paging control: port 0x7FFD (A15=0, A1=0)

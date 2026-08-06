@@ -42,6 +42,27 @@ public sealed class Ula
 
     public uint BorderColor => Palette[Border & 7];
 
+    // Per-frame log of border-colour changes so the classic loader stripes
+    // render properly. Each entry says "at this T-state within the frame,
+    // border changed to this colour". `Record(tstate, value)` on every OUT
+    // to 0xFE; RenderFrame walks the list and paints each scanline with the
+    // colour that was in effect at the moment the beam painted it.
+    private readonly List<(int Tstate, byte Colour)> _borderLog = new(1024);
+    private int _tStatesPerLine = 224;      // 48K default; 128K sets 228 via config
+    private int _firstBorderT = 0;          // T-state at which the first visible
+                                            // scanline (top border) begins
+
+    public int TStatesPerLine
+    {
+        get => _tStatesPerLine;
+        set => _tStatesPerLine = value <= 0 ? 224 : value;
+    }
+    public int FirstBorderT
+    {
+        get => _firstBorderT;
+        set => _firstBorderT = value;
+    }
+
     public Ula(SpectrumMemory mem, Keyboard kb)
     {
         _mem = mem;
@@ -64,16 +85,57 @@ public sealed class Ula
     }
 
     /// <summary>
+    /// Record a border-colour change at a specific T-state within the frame.
+    /// Called by SpectrumMachine on every OUT to port 0xFE so RenderFrame
+    /// can paint proper per-scanline stripes during tape loading.
+    /// </summary>
+    public void RecordBorderAt(int frameTState, byte colour)
+    {
+        _borderLog.Add((frameTState, (byte)(colour & 7)));
+    }
+
+    public void ClearBorderLog() => _borderLog.Clear();
+
+    /// <summary>
     /// Render one full frame (border + screen) into <paramref name="frameBuf"/>,
     /// which must be FrameW * FrameH pixels (32-bit ARGB).
     /// </summary>
     public void RenderFrame(uint[] frameBuf)
     {
         Frame++;
-        uint border = Palette[Border & 7];
-        // Fill border
+        // Build a per-scanline border colour, driven by the log of Out(0xFE)
+        // writes recorded this frame. Each visible scanline picks the last
+        // border colour that was in effect BEFORE the beam started painting
+        // it. Fall back to the current Border byte if no writes were logged
+        // (initial frame, or a title screen that has no tape activity).
+        var lineColours = new byte[FrameH];
+        byte currentColour = Border;
+        int logIdx = 0;
         for (int y = 0; y < FrameH; y++)
         {
+            int scanStartT = _firstBorderT + y * _tStatesPerLine;
+            while (logIdx < _borderLog.Count && _borderLog[logIdx].Tstate <= scanStartT)
+            {
+                currentColour = _borderLog[logIdx].Colour;
+                logIdx++;
+            }
+            lineColours[y] = currentColour;
+        }
+        // Drain any remaining border-writes so the current Border reflects
+        // the very last write of the frame (matters for the next frame's
+        // fall-back before its own log kicks in).
+        while (logIdx < _borderLog.Count)
+        {
+            currentColour = _borderLog[logIdx].Colour;
+            logIdx++;
+        }
+        Border = currentColour;
+        _borderLog.Clear();
+
+        // Fill border using the per-scanline colours.
+        for (int y = 0; y < FrameH; y++)
+        {
+            uint border = Palette[lineColours[y] & 7];
             if (y < BorderPx || y >= BorderPx + ScreenH)
             {
                 int rowStart = y * FrameW;

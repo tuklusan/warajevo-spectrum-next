@@ -109,7 +109,12 @@ public sealed class TapeDevice
         byte flag = _tap[_dataPtr];
         _pilotPulsesLeft = flag < 0x80 ? PilotPulsesHeader : PilotPulsesData;
         _state = State.PilotPulse;
-        _pulseHigh = false;
+        // Real tape convention (matches FUSE / SpecEmu / most emulators): EAR
+        // bit STARTS HIGH just before the pilot leader begins, and each
+        // subsequent edge toggles it. ROM's LD-EDGE-1 reads bit 6 through
+        // an RRA which puts it into CF, and its polling loop expects the
+        // signal to already be present when it starts sampling.
+        _pulseHigh = true;
         _pulseTicks = PilotPulseT;
     }
 

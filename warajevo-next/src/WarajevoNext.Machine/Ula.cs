@@ -94,6 +94,9 @@ public sealed class Ula
         _borderLog.Add((frameTState, (byte)(colour & 7)));
     }
 
+    /// <summary>Number of border-colour changes recorded since the last RenderFrame.</summary>
+    public int BorderLogCount => _borderLog.Count;
+
     public void ClearBorderLog() => _borderLog.Clear();
 
     /// <summary>

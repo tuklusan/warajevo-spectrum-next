@@ -161,7 +161,10 @@ public partial class MainWindow : Window
     {
         if (_paused || _machine == null || _bmp == null) return;
         _machine.RunFrame();
+        int borderWrites = _machine.Ula.BorderLogCount;
         _machine.Ula.RenderFrame(_framePix);
+        if (borderWrites >= 20 && (_diagFrames % 25) == 0)
+            Console.WriteLine($"[border] f={_diagFrames} pc=0x{_machine.Cpu.PC:X4} writes={borderWrites}");
         using (var buf = _bmp.Lock())
         {
             unsafe

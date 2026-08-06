@@ -10,14 +10,83 @@ quick tour. For depth, see the docs in that directory.
 
 ## Status
 
-| Layer     | State                                                          |
-|-----------|----------------------------------------------------------------|
-| Z80 CPU   | Complete. Passes **1335 / 1335** FUSE Z80 conformance cases    |
-| Machine   | 48K + 128K memory paging, ULA, keyboard, tape, AY-3-8912 stub  |
-| Snapshots | `.SNA` (48K), `.Z80` v1/v2/v3 (48K + 128K)                     |
-| Tape      | `.TAP` pulse-timed playback                                    |
-| UI        | Avalonia main window: menus, screen bitmap, keyboard, dialogs  |
-| CI        | Every push scanned; branch protected by a required status check |
+| Layer     | State                                                                      |
+|-----------|----------------------------------------------------------------------------|
+| Z80 CPU   | Complete. Passes **1335 / 1335** FUSE Z80 conformance cases                |
+| Machine   | 48K + 128K memory paging, ULA, keyboard, tape, AY-3-8912 stub              |
+| Snapshots | `.SNA` (48K), `.Z80` v1/v2/v3 (48K + 128K)                                 |
+| Tape      | `.TAP` pulse-timed playback, plus 0x0556 fast-load trap                    |
+| UI        | Avalonia main window: menus, screen bitmap, keyboard, dialogs              |
+| Control   | Optional TCP control server (`WARAJEVO_NEXT_CTRL_PORT`, default off) for scripted key injection + screenshot dumps  |
+| CI        | Every push scanned; branch protected by a required status check            |
+
+## Tape compatibility (as of 2026-08-05)
+
+Warajevo Next ran the full `test-media/` batch (`.TAP` images) through the
+0x0556 fast-load trap, driven end-to-end by the built-in TCP control server
+(`KEY SPACE / SNAP <path>` over telnet). 13 of 16 tapes tested reached a
+visible title, menu or actual gameplay screen; the three failures cluster
+into two known-mechanism buckets, not per-game bugs.
+
+**Reaches gameplay / menu / actual title screen:**
+
+| Title                          | Year  | Fast-load blocks | End state (screenshot)                            |
+|--------------------------------|-------|:----------------:|---------------------------------------------------|
+| Dizzy 4K Intro                 | 1999  | 4                | Magenta "presents" running                        |
+| Rotazoomer 1k Intro            | 2011  | 4                | Title + rotate-zoom effect                        |
+| Castor Intro 3: Ocean          | 1998  | 4                | Demo running                                      |
+| **Arkanoid** (Imagine)         | 1987  | 6                | Title -> attract -> high scores -> intro scroll   |
+| **Fairlight 48K** (The Edge)   | 1985  | 4                | Isometric gameplay, LIFE 99 HUD                   |
+| **Wheelie** (Microsphere)      | 1983  | 4                | "WELCOME TO THE WORLD OF WHEELIE!" menu           |
+| **Skool Daze** (Microsphere)   | 1985  | 4                | Classroom scrolling, HUD                          |
+| **Abu Simbel Profanation**     | 1985  | 4                | KEMPSTON / TECLADO control-select                 |
+| Aquaplane (loader)             | 1983  | 4                | Quicksilva "Loading...please wait" title *        |
+| AddMortem                      | ~2020 | 4                | Parody MPAA rating title card                     |
+| snakescape                     | ~2020 | 4                | "SNAKE ESCAPE" control-select                     |
+
+*Aquaplane needs the multi-load extension - see the "In progress" list below.*
+
+**Loaders on modern-engine games run through the fast-load trap cleanly** -
+even for engines Warajevo Next itself does not yet render properly. The
+tapes below all completed the 4-block LOAD "" sequence via the ROM trap
+and handed control to user code, which then rendered its engine
+identifier screen:
+
+| Title            | Year  | Fast-load blocks | End state                                     |
+|------------------|-------|:----------------:|-----------------------------------------------|
+| DreamWalker 48K  | ~2020 | 4                | "Powered by NIRVANA ENGINE" splash            |
+| MultiDude        | 2014  | 4                | "Powered by NIRVANA ENGINE" splash            |
+
+The Nirvana engine's per-row attribute updates are a separate rendering
+task on the ULA side; the *tape-loader* path already handles them.
+
+**In progress (documented failure classes, not surprises):**
+
+| Title                    | Symptom                              | Root cause                                                                |
+|--------------------------|--------------------------------------|---------------------------------------------------------------------------|
+| Sentinel (Firebird)      | "SENTINEL / Searching 00"            | Firebird custom loader polls the EAR bit; `TapeDevice.Tick` isn't yet wired to the Cpu T-state counter, so no pilot / sync / data pulses feed port 0xFE |
+| Aquaplane (multi-load)   | Sits at "Loading...please wait"      | Same - multi-load stub calls back into an edge-decoded routine, not ROM   |
+| Paperboy (Elite loader)  | Falls back to Sinclair BASIC prompt  | Elite Rapid Loader; needs TZX with `Pure Tone` / `Pulses Sequence` blocks |
+| yazziejr, Shock Megademo | Load OK, then black screen           | Per-title trace pending                                                    |
+
+Speedlocked / Alkatraz / Elite-rapid TZX titles (R-Type, Crosswize,
+Batman: The Caped Crusader, Cobra, Daley Thompson's Decathlon, ...)
+sit in `test-media/tzx/` waiting for the TZX parser (block IDs 0x11 /
+0x12 / 0x13 / 0x14) - the raw pulse timings a stock TAP throws away.
+That, plus wiring `TapeDevice.Tick` to `Cpu.TStates`, is the next
+tape-side milestone.
+
+## Screenshots
+
+See `warajevo-next/docs/screenshots/` for the full 2026-08-05 batch.
+A few highlights, all captured via the Avalonia-internal framebuffer
+dump (`SNAP <path>` over the TCP control server, exact bytes the
+compositor sees, no Win32 middleman):
+
+![Fairlight isometric gameplay](warajevo-next/docs/screenshots/2026-08-05-fairlight-gameplay.png)
+![Arkanoid intro scroll](warajevo-next/docs/screenshots/2026-08-05-arkanoid-intro.png)
+![Skool Daze classroom](warajevo-next/docs/screenshots/2026-08-05-skooldaze-classroom.png)
+![Wheelie menu](warajevo-next/docs/screenshots/2026-08-05-wheelie-menu.png)
 
 ## Build and run
 

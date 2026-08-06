@@ -97,6 +97,15 @@ public sealed class Ula
     /// <summary>Number of border-colour changes recorded since the last RenderFrame.</summary>
     public int BorderLogCount => _borderLog.Count;
 
+    /// <summary>Small diagnostic dump of the first N border-log entries.</summary>
+    public string SampleBorderLog(int n)
+    {
+        var sb = new System.Text.StringBuilder();
+        int m = System.Math.Min(n, _borderLog.Count);
+        for (int i = 0; i < m; i++) sb.Append($"({_borderLog[i].Tstate},{_borderLog[i].Colour}) ");
+        return sb.ToString();
+    }
+
     public void ClearBorderLog() => _borderLog.Clear();
 
     /// <summary>

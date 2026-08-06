@@ -115,7 +115,12 @@ public sealed class TapeDevice
                 //   mov EDGE_CNT,2
                 //   mov EDGE_ADDR,offset SYNC
                 // LEADEND: jmp EDGE_OK
-                setB = true; bReturn = 0xFF;
+                // NOT 0xFF: LD-EDGE-2 falls through to a second LD-EDGE-1
+                // whose INC B (0x05ED) would wrap 0xFF -> 0, hit RET Z at
+                // 0x05EE and return CF=0 (failure) BEFORE reaching our
+                // trap at 0x05F1. Set to a value >0xC6 (pilot threshold)
+                // but well below 0xFF so INC B stays positive.
+                setB = true; bReturn = 0xE8;
                 borderColour = (_edgeCnt & 1) != 0 ? (byte)0x02 : (byte)0x05;  // red/cyan pilot stripe
                 _edgeCnt--;
                 if (_edgeCnt <= 0)
@@ -202,7 +207,12 @@ public sealed class TapeDevice
                 _edgeBitCnt--;
                 if (bit)
                 {
-                    setB = true; bReturn = 0xFF;    // mov B,255
+                    // NOT 0xFF: LD-EDGE-2 falls through to a second LD-EDGE-1
+                // whose INC B (0x05ED) would wrap 0xFF -> 0, hit RET Z at
+                // 0x05EE and return CF=0 (failure) BEFORE reaching our
+                // trap at 0x05F1. Set to a value >0xC6 (pilot threshold)
+                // but well below 0xFF so INC B stays positive.
+                setB = true; bReturn = 0xE8;    // mov B,255
                     borderColour = 0x01;             // blue (bit 1)
                 }
                 else

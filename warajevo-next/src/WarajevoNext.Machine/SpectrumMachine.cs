@@ -163,8 +163,11 @@ public sealed class SpectrumMachine : IIoBus
     // (current + 8) so execution resumes at the border-toggle code at
     // 0x05FA. ROM's own OUT (FE),A at 0x0601 handles the stripe, and its
     // SCF/RET at 0x0603/04 completes LD-EDGE-1.
+    private int _ldEdgeTrapFires;
+    public int LdEdgeTrapFires => _ldEdgeTrapFires;
     private int HandleLdEdgePollTrap()
     {
+        _ldEdgeTrapFires++;
         long tStart = Cpu.TStates;
         if (!Tape!.TryHandleLdEdgeTrap(out bool setB, out byte bReturn, out _))
         {

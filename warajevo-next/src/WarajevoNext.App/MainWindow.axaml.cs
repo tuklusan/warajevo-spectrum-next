@@ -164,7 +164,7 @@ public partial class MainWindow : Window
         int borderWrites = _machine.Ula.BorderLogCount;
         _machine.Ula.RenderFrame(_framePix);
         if (_machine.Tape != null && _machine.Tape.IsPlaying && (_diagFrames % 100) == 0)
-            Console.WriteLine($"[tape] f={_diagFrames} pc=0x{_machine.Cpu.PC:X4} state={_machine.Tape.StateName} pilot={_machine.Tape.PilotPulsesLeft} block={_machine.Tape.CurrentBlock} dataPtr={_machine.Tape.DataPtr}/{_machine.Tape.BlockLen} borderWrites={borderWrites}");
+            Console.WriteLine($"[tape] f={_diagFrames} pc=0x{_machine.Cpu.PC:X4} state={_machine.Tape.StateName} pilot={_machine.Tape.PilotPulsesLeft} block={_machine.Tape.CurrentBlock} dataPtr={_machine.Tape.DataPtr}/{_machine.Tape.BlockLen} borderWrites={borderWrites} ldEdgeTrapFires={_machine.LdEdgeTrapFires}");
         using (var buf = _bmp.Lock())
         {
             unsafe

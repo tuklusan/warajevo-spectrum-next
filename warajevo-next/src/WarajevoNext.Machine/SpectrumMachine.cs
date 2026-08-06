@@ -114,13 +114,12 @@ public sealed class SpectrumMachine : IIoBus
     /// </summary>
     public int StepOnce()
     {
-        // Trace-time PC probe in the ROM tape-load range so we can watch
-        // where the ROM actually spins when things break.
-        if (TraceLog.Enabled && Cpu.PC >= 0x0550 && Cpu.PC < 0x0610)
+        // Trace: log EVERY instruction in LD-BYTES caller area (0x055E..0x05A0)
+        // so we can see exactly what ROM does between LD-EDGE trap fires.
+        if (TraceLog.Enabled && Cpu.PC >= 0x055E && Cpu.PC <= 0x05A0)
         {
             _romPcVisits++;
-            if ((_romPcVisits & 0x3FF) == 0)  // 1 line per 1024 hits
-                TraceLog.Log($"[rom.pc] pc=0x{Cpu.PC:X4} b=0x{Cpu.B:X2} c=0x{Cpu.C:X2} hl=0x{Cpu.HL:X4} af=0x{Cpu.AF:X4} sp=0x{Cpu.SP:X4} t={Cpu.TStates} visits={_romPcVisits}");
+            TraceLog.Log($"[rom.pc] pc=0x{Cpu.PC:X4} b=0x{Cpu.B:X2} c=0x{Cpu.C:X2} hl=0x{Cpu.HL:X4} de=0x{Cpu.DE:X4} af=0x{Cpu.AF:X4} sp=0x{Cpu.SP:X4} stackTop=0x{Memory.Read(Cpu.SP)|(Memory.Read((ushort)(Cpu.SP+1))<<8):X4} t={Cpu.TStates}");
         }
         if (Tape != null && Tape.IsPlaying)
         {

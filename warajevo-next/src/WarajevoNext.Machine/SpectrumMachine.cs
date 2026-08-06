@@ -123,12 +123,23 @@ public sealed class SpectrumMachine : IIoBus
     private int HandleFastLoadTrap()
     {
         long tStart = Cpu.TStates;
-        byte expectedFlag = (byte)(Cpu.AF_ >> 8);
-        bool isLoad = (Cpu.AF_ & 1) != 0;
+        // At entry to LD-BYTES the ROM caller convention (verified from the
+        // actual 48K ROM sites at 0x076C `XOR A / SCF / CALL 0556` and 0x0800
+        // `LD A,FFh / CALL 0556`) is that the expected flag byte is in MAIN A
+        // and the LOAD-vs-VERIFY selector is MAIN F.CF. LD-BYTES's own first
+        // real instruction at 0x0557 is `EX AF,AF'`, which then swaps them
+        // into the shadow so the routine can use main F freely for its own
+        // work - but that swap has not happened yet when our trap fires. An
+        // earlier revision of this file mistakenly read the shadow AF' here,
+        // which returned uninitialised/leftover bytes and made the trap
+        // reject the DATA block that follows every header (A'=0 forever, so
+        // flag=0xFF was always a mismatch and every LOAD "" failed 0:1).
+        byte expectedFlag = (byte)(Cpu.AF >> 8);
+        bool isLoad = (Cpu.AF & 1) != 0;
         ushort dest = Cpu.IX;
         ushort remaining = Cpu.DE;
         ushort returnAddr = (ushort)(Memory.Read(Cpu.SP) | (Memory.Read((ushort)(Cpu.SP + 1)) << 8));
-        FastLoadDiag?.Invoke($"trap: PC=0556 A'={expectedFlag:X2} CF'={(isLoad?1:0)} IX={dest:X4} DE={remaining} ret={returnAddr:X4} SP={Cpu.SP:X4}");
+        FastLoadDiag?.Invoke($"trap: PC=0556 A={expectedFlag:X2} CF={(isLoad?1:0)} IX={dest:X4} DE={remaining} ret={returnAddr:X4} SP={Cpu.SP:X4}");
 
         if (!Tape!.TryReadNextBlock(out byte flag, out ReadOnlySpan<byte> payload, out byte checksum))
         {

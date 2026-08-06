@@ -147,10 +147,11 @@ public class MachineSmokeTests
         m.Tape.Play();
 
         // ---- set the machine up as if a CALL 0x0556 had just landed:
-        //   AF' = expected flag (A'=0xFF) + CF' = 1 (LOAD)
+        //   MAIN A = expected flag byte (0xFF)   -- ROM convention at CALL time
+        //   MAIN F.CF = 1 (LOAD)                 -- 0 would mean VERIFY
         //   IX  = destination, DE = length, SP points at a return address.
         m.Cpu.PC = 0x0556;
-        m.Cpu.AF_ = (ushort)((0xFF << 8) | Z80.FlagC);
+        m.Cpu.AF = (ushort)((0xFF << 8) | Z80.FlagC);
         m.Cpu.IX = 0x8000;
         m.Cpu.DE = (ushort)data.Length;
         m.Cpu.SP = 0xFF00;

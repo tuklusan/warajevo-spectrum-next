@@ -27,3 +27,7 @@ Thumbs.db
 # .NET build output (warajevo-next port)
 **/bin/
 **/obj/
+
+# Local test media for the warajevo-next port - tapes, snapshots and TZX
+# images kept out of the repo (licensing / weight); populated locally only.
+warajevo-next/test-media/

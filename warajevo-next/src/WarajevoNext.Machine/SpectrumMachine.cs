@@ -128,18 +128,69 @@ public sealed class SpectrumMachine : IIoBus
     /// </summary>
     public int StepOnce()
     {
-        if (Cpu.PC == 0x0556 && Tape != null && Tape.IsPlaying && IsSpectrum48LdBytes())
+        if (Tape != null && Tape.IsPlaying)
         {
-            if (FastLoad) return HandleFastLoadTrap();
-            // Normal load path: sync the tape to the very start of the
-            // current block's pilot so the ROM sees a fresh full pilot
-            // rather than whatever mid-pilot state we drifted to while the
-            // machine sat at the BASIC READY prompt. This makes edge
-            // decoding actually complete instead of timing out. Real
-            // cassette equivalent of "user pressed Play now".
-            Tape.SyncToBlockStart();
+            if (Cpu.PC == 0x0556 && IsSpectrum48LdBytes())
+            {
+                if (FastLoad) return HandleFastLoadTrap();
+                // Normal-load: reset the LD-EDGE state machine so the trap
+                // starts fresh on this block, and let ROM enter LD-BYTES.
+                Tape.ResetEdgeMachine();
+            }
+            // Warajevo-style LD-EDGE-1 trap. Fires only when fast-load is
+            // OFF and we recognise the routine. Handles both header pilot
+            // and data-bit clocking in one place; ROM's outer LD-BYTES
+            // runs its natural border-stripe OUT (FE) loop between calls.
+            else if (!FastLoad && Cpu.PC == 0x05E7 && IsSpectrum48LdEdge())
+            {
+                return HandleLdEdgeTrap();
+            }
         }
         return Cpu.Step();
+    }
+
+    // Sinclair 48K ROM at LD-EDGE-1 (0x05E7):
+    //   05E7: 3E 16       LD A,16h
+    //   05E9: 3D          DEC A
+    //   05EA: 20 FD       JR NZ,05E9
+    //   05EC: A7          AND A
+    //   05ED: 04          INC B
+    // Six bytes is enough to distinguish from any custom loader that
+    // happens to sit at the same address in RAM.
+    private static readonly byte[] LdEdgeSig = { 0x3E, 0x16, 0x3D, 0x20, 0xFD, 0xA7 };
+
+    private bool IsSpectrum48LdEdge()
+    {
+        for (int i = 0; i < LdEdgeSig.Length; i++)
+            if (Memory.Read((ushort)(0x05E7 + i)) != LdEdgeSig[i]) return false;
+        return true;
+    }
+
+    private int HandleLdEdgeTrap()
+    {
+        long tStart = Cpu.TStates;
+        if (!Tape!.TryHandleLdEdgeTrap(out byte bReturn, out byte borderColour))
+        {
+            // No more edges - report failure so ROM times out gracefully.
+            Cpu.B = 0;
+            SetCarry(false);
+            PopReturn();
+            return (int)(Cpu.TStates - tStart);
+        }
+        // Update border with the requested colour (produces classic stripes).
+        int frameT = (int)(Cpu.TStates - _frameStartT);
+        if (frameT < 0) frameT = 0;
+        Ula.RecordBorderAt(frameT, borderColour);
+        Ula.Out(0x00FE, borderColour);
+        // Charge ROM-realistic time for this edge so the tape and CPU
+        // stay in step. Real LD-EDGE-1 takes ~200 T-states on a short
+        // pulse, ~2200 on a long pilot pulse; use a middle value that
+        // preserves the ~50 Hz frame illusion.
+        Cpu.TStates += 200L;
+        Cpu.B = bReturn;
+        SetCarry(true);
+        PopReturn();
+        return (int)(Cpu.TStates - tStart);
     }
 
     private bool IsSpectrum48LdBytes()

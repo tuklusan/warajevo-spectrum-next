@@ -48,6 +48,151 @@ public sealed class TapeDevice
     public bool IsPlaying { get; private set; }
     public byte CurrentEar => (byte)(_pulseHigh ? 0x40 : 0x00);
     public int Blocks { get; private set; }
+
+    // ---------------------------------------------------------------------
+    // Warajevo-style ROM LD-EDGE-1 trap state machine.
+    //
+    // Rather than simulate cycle-accurate pulse edges (fragile, and needs
+    // the CPU's IN A,(FE) to happen at exactly the right T-state), we
+    // trap the ROM's LD-EDGE-1 routine at 0x05E7 and hand the caller a
+    // synthetic result: B register set to a "long pulse" value on the
+    // right beats, CF=1 always so the ROM never times out. This mirrors
+    // Warajevo 2.50's TAPE.ASM (LEADER/SYNC/BITS at line 1901+): each
+    // trap fire advances the tape-edge counter one step and returns.
+    //
+    // ROM's LD-BYTES outer loop then constructs bytes bit-by-bit exactly
+    // as if a real cassette were feeding pulses - so border stripes render
+    // naturally (ROM's own OUT (FE),A calls run), and the outer LOAD ""
+    // sequences all four blocks correctly.
+    // ---------------------------------------------------------------------
+    private enum EdgePhase { Prep, Leader, Sync, Bits, Done }
+    private EdgePhase _edgePhase = EdgePhase.Prep;
+    private int _edgeCnt;        // remaining edges in current phase
+    private int _edgeBitCnt;     // bits left in current byte
+    private byte _edgeByte;      // current byte being clocked out
+    private int _edgeDataPtr;    // absolute _tap[] index of next data byte
+    private int _edgeDataEnd;    // one-past-end of current block data
+    private byte _edgeBitSide;   // toggles 0/1 per edge - two edges per bit
+    private byte _lastEdgeB;     // last B value returned to ROM
+
+    /// <summary>
+    /// Called by SpectrumMachine when PC lands on ROM 0x05E7 (LD-EDGE-1).
+    /// Advances the Warajevo-style edge state machine one step and fills
+    /// out (bReturn, borderColour, ok). SpectrumMachine then writes B into
+    /// Cpu.B, OUTs the border colour to port 0xFE, sets CF, and pops the
+    /// return address so LD-EDGE-1's body never runs.
+    /// </summary>
+    public bool TryHandleLdEdgeTrap(out byte bReturn, out byte borderColour)
+    {
+        bReturn = 0xFF;
+        borderColour = 0x02;  // pilot/leader stripe = red
+        if (_tap == null) return false;
+
+        switch (_edgePhase)
+        {
+            case EdgePhase.Prep:
+                // Bind onto the current block's parameters. Skips the block
+                // header check; SpectrumMachine.StepOnce only invokes the
+                // trap when Tape.IsPlaying, which itself requires a loaded
+                // TAP with at least one block.
+                if (_blockPtr + 2 > _tap.Length) return false;
+                _blockLen = _tap[_blockPtr] | (_tap[_blockPtr + 1] << 8);
+                if (_blockLen < 2) return false;
+                _edgeDataPtr = _blockPtr + 2;                 // includes flag byte
+                _edgeDataEnd = _edgeDataPtr + _blockLen;      // includes checksum
+                byte flag = _tap[_edgeDataPtr];
+                // Header = 8064 pilot edges, data = 3220 (per Warajevo TAPE.ASM
+                // GETTAPE, line 1587). Two ROM samples per edge - one on each
+                // half-cycle - so an EDGE count of 8064 gives ROM 4032 leader
+                // "pulses" to lock onto, comfortably above the 256-pulse
+                // minimum in Sinclair FAQ.
+                _edgeCnt = flag < 0x80 ? 8064 : 3220;
+                _edgePhase = EdgePhase.Leader;
+                _edgeBitSide = 0;
+                _lastEdgeB = 0xFF;
+                bReturn = 0xFF;
+                borderColour = 0x02;
+                return true;
+
+            case EdgePhase.Leader:
+                bReturn = 0xFF;               // long pulse -> ROM reads as pilot
+                borderColour = (_edgeCnt & 1) != 0 ? (byte)0x02 : (byte)0x05;  // red / cyan stripe
+                _edgeCnt--;
+                if (_edgeCnt <= 0)
+                {
+                    _edgePhase = EdgePhase.Sync;
+                    _edgeCnt = 2;
+                }
+                _lastEdgeB = bReturn;
+                return true;
+
+            case EdgePhase.Sync:
+                // Two short sync edges - report as a "not-a-pilot" value so
+                // ROM's leader-count loop exits and moves to data mode.
+                bReturn = 0x80;
+                borderColour = (_edgeCnt & 1) != 0 ? (byte)0x02 : (byte)0x05;
+                _edgeCnt--;
+                if (_edgeCnt <= 0)
+                {
+                    _edgePhase = EdgePhase.Bits;
+                    _edgeBitCnt = 0;
+                    _edgeBitSide = 0;
+                }
+                _lastEdgeB = bReturn;
+                return true;
+
+            case EdgePhase.Bits:
+                // Two edges per bit - first edge = "arrives", second = "settles".
+                // Report B based on the CURRENT bit; ROM compares B to a
+                // threshold to distinguish bit 0 (short pulse) from bit 1
+                // (long pulse).
+                if (_edgeBitCnt == 0)
+                {
+                    if (_edgeDataPtr >= _edgeDataEnd)
+                    {
+                        // End of block. Move on to next block or done.
+                        _edgePhase = EdgePhase.Done;
+                        _blockPtr = _edgeDataEnd;
+                        CurrentBlock++;
+                        if (_blockPtr >= _tap.Length) { IsPlaying = false; }
+                        else _edgePhase = EdgePhase.Prep;
+                        bReturn = 0x80; borderColour = 0x00;
+                        _lastEdgeB = bReturn;
+                        return true;
+                    }
+                    _edgeByte = _tap[_edgeDataPtr++];
+                    _edgeBitCnt = 8;
+                    _edgeBitSide = 0;
+                }
+                // Extract top bit of current byte.
+                bool bit = (_edgeByte & 0x80) != 0;
+                bReturn = bit ? (byte)0xFF : (byte)0x80;
+                borderColour = bit ? (byte)0x06 : (byte)0x01;   // yellow / blue data stripe
+                _edgeBitSide ^= 1;
+                if (_edgeBitSide == 0)
+                {
+                    // Both halves of this bit reported - shift to next.
+                    _edgeByte = (byte)(_edgeByte << 1);
+                    _edgeBitCnt--;
+                }
+                _lastEdgeB = bReturn;
+                return true;
+
+            case EdgePhase.Done:
+                bReturn = 0; borderColour = 0;
+                return false;
+        }
+        return false;
+    }
+
+    /// <summary>Reset the edge state machine so the next 0x05E7 trap starts fresh at the current block.</summary>
+    public void ResetEdgeMachine()
+    {
+        _edgePhase = EdgePhase.Prep;
+        _edgeCnt = 0;
+        _edgeBitCnt = 0;
+        _edgeBitSide = 0;
+    }
     public int CurrentBlock { get; private set; }
 
     // Diagnostics

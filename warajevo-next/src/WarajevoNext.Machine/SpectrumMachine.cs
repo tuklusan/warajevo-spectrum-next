@@ -98,26 +98,16 @@ public sealed class SpectrumMachine : IIoBus
         while (Cpu.TStates < target)
         {
             StepOnce();
-            // Feed the tape pulse machinery by exactly the T-states the
-            // last step consumed - but ONLY when the fast-load trap is
-            // disabled. With fast-load on the trap adds ~44 T-states/byte
-            // artificially per call (up to 180K for a 4 KB block), and if
-            // Tick sees that inflated delta it blasts the newly-started
-            // next-block's pilot pulses out of the tape state machine
-            // before the ROM ever gets a chance to sample them. Fast-load
-            // consumes blocks itself via TryReadNextBlock; the edge state
-            // machine is not needed in that mode.
-            if (Tape != null && Tape.IsPlaying && !FastLoad)
-            {
-                long now = Cpu.TStates;
-                int delta = (int)(now - prev);
-                if (delta > 0) Tape.Tick(delta);
-                prev = now;
-            }
-            else
-            {
-                prev = Cpu.TStates;
-            }
+            // Tape.Tick is only needed by loaders that read the EAR bit
+            // directly (custom / turbo loaders that never call ROM 0x05E7).
+            // With fast-load on, the LD-BYTES trap at 0x0556 consumes whole
+            // blocks and neither Tick nor the LD-EDGE trap is needed.
+            // With fast-load off but the LD-EDGE trap active, ROM's own
+            // LD-BYTES loop drives everything via the trap; Ticking the
+            // pulse state machine at the same time would fight the trap's
+            // block pointer. Simplest correct rule: never call Tick here.
+            // Direct-EAR loaders will need their own dedicated hook.
+            prev = Cpu.TStates;
         }
         FrameCount++;
     }

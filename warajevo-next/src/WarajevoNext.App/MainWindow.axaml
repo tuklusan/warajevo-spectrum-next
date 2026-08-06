@@ -1,7 +1,9 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="WarajevoNext.App.MainWindow"
-        Width="960" Height="800"
+        Width="800" Height="720"
+        WindowStartupLocation="Manual"
+        Position="0,0"
         Title="Warajevo Next — ZX Spectrum emulator (48K / 128K)">
   <DockPanel LastChildFill="True">
     <Menu DockPanel.Dock="Top">

@@ -15,7 +15,11 @@ using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using WarajevoNext.Machine;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 
 namespace WarajevoNext.App;
 
@@ -116,6 +120,12 @@ public partial class MainWindow : Window
         SetStatus($"Model set to {m}. Use File > Load ROM if switching to 128K.");
     }
 
+    private int _diagFrames;
+    private static readonly string? SnapshotDir = Environment.GetEnvironmentVariable("WARAJEVO_NEXT_SNAP_DIR");
+    private static readonly int SnapshotEvery = int.TryParse(Environment.GetEnvironmentVariable("WARAJEVO_NEXT_SNAP_EVERY"), out var _se) ? _se : 0;
+    private static readonly int AutoLoadAtFrame = int.TryParse(Environment.GetEnvironmentVariable("WARAJEVO_NEXT_AUTOLOAD_FRAME"), out var _al) ? _al : 0;
+    private bool _autoLoadDone;
+
     private void Tick()
     {
         if (_paused || _machine == null || _bmp == null) return;
@@ -123,9 +133,6 @@ public partial class MainWindow : Window
         _machine.Ula.RenderFrame(_framePix);
         using (var buf = _bmp.Lock())
         {
-            // Row-by-row copy honouring buf.RowBytes. Some Skia backends
-            // (Windows in particular) pad rows to a stride greater than
-            // Width*4; a flat memcpy would leave the display blank.
             unsafe
             {
                 int rowBytes = buf.RowBytes;
@@ -144,6 +151,122 @@ public partial class MainWindow : Window
             }
         }
         this.FindControl<Image>("ScreenImage")!.InvalidateVisual();
+
+        // --- Avalonia-internal periodic PNG snapshot ---------------------
+        // Direct dump of the ULA framebuffer to a file; this bypasses all
+        // desktop / Win32 capture flakiness and shows exactly what the
+        // emulator is compositing.
+        if (SnapshotDir != null && SnapshotEvery > 0 && (_diagFrames % SnapshotEvery) == 0)
+        {
+            try
+            {
+                Directory.CreateDirectory(SnapshotDir);
+                var path = Path.Combine(SnapshotDir, $"screen_{_diagFrames:D5}.png");
+                SavePngBgra(path, _framePix, Ula.FrameW, Ula.FrameH);
+                Console.WriteLine($"[snap] f={_diagFrames} pc=0x{_machine.Cpu.PC:X4} -> {path}");
+            }
+            catch (Exception ex) { Console.WriteLine($"[snap] err: {ex.Message}"); }
+        }
+
+        // --- Auto-type LOAD "" after N frames, for hands-off tape test ---
+        if (!_autoLoadDone && AutoLoadAtFrame > 0 && _diagFrames >= AutoLoadAtFrame && _machine.Tape != null)
+        {
+            _autoLoadDone = true;
+            Console.WriteLine($"[auto] injecting LOAD \"\" at frame {_diagFrames} pc=0x{_machine.Cpu.PC:X4}");
+            _ = InjectLoadSequenceAsync();
+        }
+
+        _diagFrames++;
+    }
+
+    private async Task InjectLoadSequenceAsync()
+    {
+        // Press J (LOAD keyword), Symbol-Shift+P, Symbol-Shift+P, Enter.
+        // Each "press" holds the spectrum keys for a few frames so the
+        // ROM's 50 Hz key scan definitely sees them.
+        var kb = _machine!.Keyboard;
+        await HoldAsync(new[] { SpectrumKey.J });
+        await HoldAsync(new[] { SpectrumKey.SymShift, SpectrumKey.P });
+        await HoldAsync(new[] { SpectrumKey.SymShift, SpectrumKey.P });
+        await HoldAsync(new[] { SpectrumKey.Enter });
+        Console.WriteLine("[auto] LOAD \"\" sequence delivered");
+    }
+
+    private async Task HoldAsync(SpectrumKey[] keys)
+    {
+        foreach (var k in keys) _machine!.Keyboard.SetKey(k, true);
+        await Task.Delay(120);   // ~6 frames
+        foreach (var k in keys) _machine!.Keyboard.SetKey(k, false);
+        await Task.Delay(80);    // release gap
+    }
+
+    private static void SavePngBgra(string path, uint[] pixels, int w, int h)
+    {
+        // Minimal PNG writer: uncompressed deflate wrap of the raw filtered
+        // scanlines. Keeps the app free of any external image dependency.
+        using var fs = File.Create(path);
+        using var bw = new BinaryWriter(fs);
+        bw.Write(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A });
+        // IHDR
+        WriteChunk(bw, "IHDR", BE(w).Concat(BE(h)).Concat(new byte[] { 8, 6, 0, 0, 0 }).ToArray());
+        // IDAT: filter=0 then RGBA per row, deflate-compressed
+        int stride = w * 4;
+        var raw = new byte[(stride + 1) * h];
+        int o = 0;
+        for (int y = 0; y < h; y++)
+        {
+            raw[o++] = 0; // filter None
+            int p = y * w;
+            for (int x = 0; x < w; x++)
+            {
+                uint px = pixels[p + x]; // ARGB packed; store as R,G,B,A
+                byte b = (byte)(px & 0xFF);
+                byte g = (byte)((px >> 8) & 0xFF);
+                byte r = (byte)((px >> 16) & 0xFF);
+                byte a = (byte)((px >> 24) & 0xFF);
+                raw[o++] = r; raw[o++] = g; raw[o++] = b; raw[o++] = a;
+            }
+        }
+        using var ms = new MemoryStream();
+        // Write zlib header manually then Deflate the raw data
+        ms.WriteByte(0x78); ms.WriteByte(0x9C);
+        using (var ds = new System.IO.Compression.DeflateStream(ms, System.IO.Compression.CompressionLevel.Fastest, true))
+            ds.Write(raw, 0, raw.Length);
+        // Adler32 of raw
+        uint adler = Adler32(raw);
+        ms.WriteByte((byte)(adler >> 24)); ms.WriteByte((byte)(adler >> 16));
+        ms.WriteByte((byte)(adler >> 8)); ms.WriteByte((byte)adler);
+        WriteChunk(bw, "IDAT", ms.ToArray());
+        WriteChunk(bw, "IEND", Array.Empty<byte>());
+    }
+    private static byte[] BE(int v) => new byte[] { (byte)(v >> 24), (byte)(v >> 16), (byte)(v >> 8), (byte)v };
+    private static void WriteChunk(BinaryWriter bw, string tag, byte[] data)
+    {
+        bw.Write(BE(data.Length));
+        var tagBytes = System.Text.Encoding.ASCII.GetBytes(tag);
+        var buf = tagBytes.Concat(data).ToArray();
+        bw.Write(buf);
+        bw.Write(BE((int)Crc32(buf)));
+    }
+    private static uint Crc32(byte[] data)
+    {
+        uint c;
+        uint[] table = new uint[256];
+        for (uint n = 0; n < 256; n++)
+        {
+            c = n;
+            for (int k = 0; k < 8; k++) c = (c & 1) != 0 ? 0xEDB88320 ^ (c >> 1) : c >> 1;
+            table[n] = c;
+        }
+        c = 0xFFFFFFFF;
+        foreach (var b in data) c = table[(c ^ b) & 0xFF] ^ (c >> 8);
+        return c ^ 0xFFFFFFFF;
+    }
+    private static uint Adler32(byte[] data)
+    {
+        uint a = 1, b = 0;
+        foreach (var byteVal in data) { a = (a + byteVal) % 65521; b = (b + a) % 65521; }
+        return (b << 16) | a;
     }
 
     private void OnKeyDown(object? sender, KeyEventArgs e) { if (_machine != null && _keyMap.TryGetValue(e.Key, out var k)) _machine.Keyboard.SetKey(k, true); }

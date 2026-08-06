@@ -182,7 +182,18 @@ public sealed class SpectrumMachine : IIoBus
         }
         if (setB) Cpu.B = bReturn;
         Cpu.PC = 0x05FA;       // Warajevo EDGE_AFTER = PC + 8 (+1 for NOP trick)
-        Cpu.TStates += 200L;
+        // Charge realistic T-states per edge so the border stripes look
+        // like a normal Spectrum loader rather than a speedloader:
+        //   Leader (pilot): 2168 T-states per edge (Sinclair FAQ)
+        //   Sync:            667 or 735 T-states
+        //   Bits:            855 (bit 0) or 1710 (bit 1)
+        // ROM's LD-EDGE-1 body already consumed ~350 T-states between
+        // entry and PC=0x05F1 (LD A,16 / DEC A loop + INC B), so we top
+        // up the difference so caller-visible total matches real timing.
+        long edgeT = Tape.CurrentEdgeTStates;
+        long topUp = edgeT - 350;
+        if (topUp < 0) topUp = 0;
+        Cpu.TStates += topUp;
         if (_ldEdgeTrapFires <= 40 || (_ldEdgeTrapFires & 0xFF) == 0)
             TraceLog.Log($"[ld-edge#{_ldEdgeTrapFires}] setB={setB} bWas=0x{pcBeforeB:X2} bNow=0x{Cpu.B:X2} c=0x{Cpu.C:X2} sp=0x{Cpu.SP:X4} t={Cpu.TStates} phase={Tape.EdgePhaseName} eCnt={Tape.EdgeCnt} eBitCnt={Tape.EdgeBitCnt} block={Tape.CurrentBlock} dPos={Tape.EdgeDataPos}");
         return (int)(Cpu.TStates - tStart);

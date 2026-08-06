@@ -122,6 +122,7 @@ public sealed class TapeDevice
                 // but well below 0xFF so INC B stays positive.
                 setB = true; bReturn = 0xE8;
                 borderColour = (_edgeCnt & 1) != 0 ? (byte)0x02 : (byte)0x05;  // red/cyan pilot stripe
+                CurrentEdgeTStates = PilotPulseT;  // 2168 T-states = real pilot pulse
                 _edgeCnt--;
                 if (_edgeCnt <= 0)
                 {
@@ -141,6 +142,8 @@ public sealed class TapeDevice
                 //   jmp EDGE_OK           ; B unchanged
                 setB = false;                                       // Warajevo does NOT touch B in sync
                 borderColour = (_edgeCnt & 1) != 0 ? (byte)0x02 : (byte)0x05;
+                // Sync pulses: first is 667 T-states, second is 735 T-states
+                CurrentEdgeTStates = (_edgeCnt == 2) ? Sync1T : Sync2T;
                 _edgeCnt--;
                 if (_edgeCnt <= 0)
                 {
@@ -172,8 +175,13 @@ public sealed class TapeDevice
                 if (_edgeBitSide != 0)
                 {
                     // First edge of a bit: don't touch B, don't process a bit.
+                    // But set edge duration based on what the current bit
+                    // WOULD be (peek MSB of current byte) so ROM sees
+                    // matching pulse widths on both halves of the bit.
                     setB = false;
                     borderColour = 0x06;  // yellow (data first edge)
+                    bool peekBit = _edgeBitCnt > 0 && (_edgeByte & 0x80) != 0;
+                    CurrentEdgeTStates = peekBit ? Bit1T : Bit0T;
                     return true;
                 }
                 // Second edge: process the next bit.
@@ -207,18 +215,15 @@ public sealed class TapeDevice
                 _edgeBitCnt--;
                 if (bit)
                 {
-                    // NOT 0xFF: LD-EDGE-2 falls through to a second LD-EDGE-1
-                // whose INC B (0x05ED) would wrap 0xFF -> 0, hit RET Z at
-                // 0x05EE and return CF=0 (failure) BEFORE reaching our
-                // trap at 0x05F1. Set to a value >0xC6 (pilot threshold)
-                // but well below 0xFF so INC B stays positive.
-                setB = true; bReturn = 0xE8;    // mov B,255
+                    setB = true; bReturn = 0xE8;    // 0xE8 not 0xFF (INC B safe)
                     borderColour = 0x01;             // blue (bit 1)
+                    CurrentEdgeTStates = Bit1T;      // 1710 T-states
                 }
                 else
                 {
                     setB = false;                    // B unchanged
                     borderColour = 0x00;             // black (bit 0)
+                    CurrentEdgeTStates = Bit0T;      // 855 T-states
                 }
                 return true;
 
@@ -248,6 +253,10 @@ public sealed class TapeDevice
     public int EdgeCnt => _edgeCnt;
     public int EdgeBitCnt => _edgeBitCnt;
     public int EdgeDataPos => _edgeDataPtr - _blockPtr - 2;
+    // Duration of the LAST edge reported by TryHandleLdEdgeTrap (T-states).
+    // Used by the trap caller to charge Cpu.TStates so tape playback runs
+    // at real-Spectrum wall clock rather than emulator-CPU speed.
+    public int CurrentEdgeTStates { get; private set; } = PilotPulseT;
 
     public void LoadTap(byte[] data)
     {

@@ -85,6 +85,21 @@ public sealed class TapeDevice
     public void Play() { if (_tap != null && _blockPtr < _tap.Length) { StartBlock(); IsPlaying = true; } }
     public void Stop() => IsPlaying = false;
 
+    /// <summary>
+    /// Snap the current block's pulse machinery back to the very start of
+    /// its pilot. Called by SpectrumMachine on the first PC=0x0556 landing
+    /// so the ROM's LD-BYTES sees a fresh, full pilot rather than whatever
+    /// mid-pilot state the tape had drifted to while the machine sat at the
+    /// BASIC READY prompt. Mirrors "user press Play on tape" cassette
+    /// behaviour: pulses only start streaming when the loader is listening.
+    /// </summary>
+    public void SyncToBlockStart()
+    {
+        if (_tap == null || _blockPtr + 2 > _tap.Length) return;
+        StartBlock();
+        IsPlaying = true;
+    }
+
     private void StartBlock()
     {
         if (_tap == null || _blockPtr + 2 > _tap.Length) { IsPlaying = false; return; }

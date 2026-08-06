@@ -128,12 +128,16 @@ public sealed class SpectrumMachine : IIoBus
     /// </summary>
     public int StepOnce()
     {
-        if (FastLoad
-            && Cpu.PC == 0x0556
-            && Tape != null && Tape.IsPlaying
-            && IsSpectrum48LdBytes())
+        if (Cpu.PC == 0x0556 && Tape != null && Tape.IsPlaying && IsSpectrum48LdBytes())
         {
-            return HandleFastLoadTrap();
+            if (FastLoad) return HandleFastLoadTrap();
+            // Normal load path: sync the tape to the very start of the
+            // current block's pilot so the ROM sees a fresh full pilot
+            // rather than whatever mid-pilot state we drifted to while the
+            // machine sat at the BASIC READY prompt. This makes edge
+            // decoding actually complete instead of timing out. Real
+            // cassette equivalent of "user pressed Play now".
+            Tape.SyncToBlockStart();
         }
         return Cpu.Step();
     }

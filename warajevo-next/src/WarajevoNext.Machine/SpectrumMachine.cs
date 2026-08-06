@@ -98,14 +98,16 @@ public sealed class SpectrumMachine : IIoBus
         while (Cpu.TStates < target)
         {
             StepOnce();
-            // Advance the tape pulse machinery by exactly the T-states the
-            // last step consumed. Required for any loader that reads the
-            // EAR bit itself (Sentinel's "Searching 00" Firebird loader,
-            // Aquaplane's multi-load stub, ...) - without this feed the
-            // tape's edge state never flips even while IsPlaying is true,
-            // and the loader's polling loop times out to "R Tape loading
-            // error". Cheap when Tape is null or Stop()ped.
-            if (Tape != null && Tape.IsPlaying)
+            // Feed the tape pulse machinery by exactly the T-states the
+            // last step consumed - but ONLY when the fast-load trap is
+            // disabled. With fast-load on the trap adds ~44 T-states/byte
+            // artificially per call (up to 180K for a 4 KB block), and if
+            // Tick sees that inflated delta it blasts the newly-started
+            // next-block's pilot pulses out of the tape state machine
+            // before the ROM ever gets a chance to sample them. Fast-load
+            // consumes blocks itself via TryReadNextBlock; the edge state
+            // machine is not needed in that mode.
+            if (Tape != null && Tape.IsPlaying && !FastLoad)
             {
                 long now = Cpu.TStates;
                 int delta = (int)(now - prev);

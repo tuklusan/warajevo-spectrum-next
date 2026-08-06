@@ -15,7 +15,7 @@ quick tour. For depth, see the docs in that directory.
 | Z80 CPU   | Complete. Passes **1335 / 1335** FUSE Z80 conformance cases                |
 | Machine   | 48K + 128K memory paging, ULA, keyboard, tape, AY-3-8912 stub              |
 | Snapshots | `.SNA` (48K), `.Z80` v1/v2/v3 (48K + 128K)                                 |
-| Tape      | `.TAP` pulse-timed playback, plus 0x0556 fast-load trap                    |
+| Tape      | `.TAP` fast-load trap (working, default); real edge-decoded slow load (WIP - pilot stripes correct, LD-BYTES decode incomplete). TZX planned |
 | UI        | Avalonia main window: menus, screen bitmap, keyboard, dialogs              |
 | Control   | Optional TCP control server (`WARAJEVO_NEXT_CTRL_PORT`, default off) for scripted key injection + screenshot dumps  |
 | CI        | Every push scanned; branch protected by a required status check            |

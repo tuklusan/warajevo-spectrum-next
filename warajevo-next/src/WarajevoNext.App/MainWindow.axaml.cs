@@ -123,10 +123,24 @@ public partial class MainWindow : Window
         _machine.Ula.RenderFrame(_framePix);
         using (var buf = _bmp.Lock())
         {
+            // Row-by-row copy honouring buf.RowBytes. Some Skia backends
+            // (Windows in particular) pad rows to a stride greater than
+            // Width*4; a flat memcpy would leave the display blank.
             unsafe
             {
-                fixed (uint* src = _framePix)
-                    System.Buffer.MemoryCopy(src, (void*)buf.Address, _framePix.Length * 4L, _framePix.Length * 4L);
+                int rowBytes = buf.RowBytes;
+                int srcRowBytes = Ula.FrameW * 4;
+                byte* dstRow = (byte*)buf.Address;
+                fixed (uint* srcBase = _framePix)
+                {
+                    byte* srcRow = (byte*)srcBase;
+                    for (int y = 0; y < Ula.FrameH; y++)
+                    {
+                        System.Buffer.MemoryCopy(srcRow, dstRow, rowBytes, srcRowBytes);
+                        srcRow += srcRowBytes;
+                        dstRow += rowBytes;
+                    }
+                }
             }
         }
         this.FindControl<Image>("ScreenImage")!.InvalidateVisual();

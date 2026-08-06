@@ -125,7 +125,10 @@ public partial class MainWindow : Window
     private static readonly string? SnapshotDir = Environment.GetEnvironmentVariable("WARAJEVO_NEXT_SNAP_DIR");
     private static readonly int SnapshotEvery = int.TryParse(Environment.GetEnvironmentVariable("WARAJEVO_NEXT_SNAP_EVERY"), out var _se) ? _se : 0;
     private static readonly int AutoLoadAtFrame = int.TryParse(Environment.GetEnvironmentVariable("WARAJEVO_NEXT_AUTOLOAD_FRAME"), out var _al) ? _al : 0;
+    private static readonly string? StartKeysSpec = Environment.GetEnvironmentVariable("WARAJEVO_NEXT_STARTKEYS");
+    private static readonly int StartKeysAtFrame = int.TryParse(Environment.GetEnvironmentVariable("WARAJEVO_NEXT_STARTKEYS_FRAME"), out var _sk) ? _sk : 0;
     private bool _autoLoadDone;
+    private bool _startKeysDone;
 
     private void Tick()
     {
@@ -177,7 +180,48 @@ public partial class MainWindow : Window
             _ = InjectLoadSequenceAsync();
         }
 
+        // --- Optional post-load "start the game" key sequence -------------
+        // WARAJEVO_NEXT_STARTKEYS is a comma-separated list of Spectrum
+        // key tokens; each token is one press. Chord several keys with '+',
+        // eg "0,5" plays two presses ("0" then "5"), "SS+P" is one Sym-
+        // Shift+P chord. Bare digits get their D-prefix (0..9 -> D0..D9);
+        // everything else matches SpectrumKey enum names case-insensitively.
+        if (!_startKeysDone && StartKeysAtFrame > 0 && _diagFrames >= StartKeysAtFrame
+            && !string.IsNullOrWhiteSpace(StartKeysSpec) && _machine.Tape != null)
+        {
+            _startKeysDone = true;
+            Console.WriteLine($"[auto] injecting STARTKEYS \"{StartKeysSpec}\" at frame {_diagFrames} pc=0x{_machine.Cpu.PC:X4}");
+            _ = InjectStartKeysAsync(StartKeysSpec);
+        }
+
         _diagFrames++;
+    }
+
+    private async Task InjectStartKeysAsync(string spec)
+    {
+        foreach (var token in spec.Split(','))
+        {
+            var chord = token.Split('+')
+                             .Select(ParseSpectrumKey)
+                             .Where(k => k.HasValue)
+                             .Select(k => k!.Value)
+                             .ToArray();
+            if (chord.Length == 0)
+            {
+                Console.WriteLine($"[auto] STARTKEYS: skipping unknown token '{token}'");
+                continue;
+            }
+            await HoldAsync(chord);
+        }
+        Console.WriteLine("[auto] STARTKEYS delivered");
+    }
+
+    private static SpectrumKey? ParseSpectrumKey(string raw)
+    {
+        var s = raw.Trim();
+        if (s.Length == 0) return null;
+        if (s.Length == 1 && char.IsDigit(s[0])) s = "D" + s; // 0 -> D0
+        return Enum.TryParse<SpectrumKey>(s, ignoreCase: true, out var k) ? k : null;
     }
 
     private async Task InjectLoadSequenceAsync()

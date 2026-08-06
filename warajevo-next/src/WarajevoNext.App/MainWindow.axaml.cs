@@ -100,6 +100,7 @@ public partial class MainWindow : Window
         }
         else SetStatus($"Booted with 48.rom ({rom48.Length} bytes).");
         _machine = new SpectrumMachine(SpectrumModel.FortyEight, rom48);
+        _machine.FastLoadDiag = s => Console.WriteLine($"[fastload] {s}");
         _machine.Reset();
 
         // If the user passed --tape PATH, auto-load and play it. Fast-load

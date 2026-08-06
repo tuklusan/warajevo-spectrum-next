@@ -124,16 +124,20 @@ public sealed class SpectrumMachine : IIoBus
     {
         long tStart = Cpu.TStates;
         byte expectedFlag = (byte)(Cpu.AF_ >> 8);
+        bool isLoad = (Cpu.AF_ & 1) != 0;
         ushort dest = Cpu.IX;
         ushort remaining = Cpu.DE;
+        FastLoadDiag?.Invoke($"trap: PC=0556 A'={expectedFlag:X2} CF'={(isLoad?1:0)} IX={dest:X4} DE={remaining}");
 
         if (!Tape!.TryReadNextBlock(out byte flag, out ReadOnlySpan<byte> payload, out byte checksum))
         {
+            FastLoadDiag?.Invoke("trap: no more blocks -> CF=0");
             SetCarry(false); PopReturn();
             return (int)(Cpu.TStates - tStart);
         }
         if (flag != expectedFlag)
         {
+            FastLoadDiag?.Invoke($"trap: flag mismatch got={flag:X2} want={expectedFlag:X2} -> CF=0");
             SetCarry(false); PopReturn();
             return (int)(Cpu.TStates - tStart);
         }
@@ -147,7 +151,7 @@ public sealed class SpectrumMachine : IIoBus
         byte chk = flag;
         for (int i = 0; i < toCopy; i++)
         {
-            Memory.Write((ushort)(dest + i), payload[i]);
+            if (isLoad) Memory.Write((ushort)(dest + i), payload[i]);
             chk ^= payload[i];
         }
         for (int i = toCopy; i < payload.Length; i++) chk ^= payload[i];
@@ -156,6 +160,7 @@ public sealed class SpectrumMachine : IIoBus
         Cpu.DE = (ushort)(remaining - toCopy);
         bool ok = (chk == checksum) && (remaining <= payload.Length);
         SetCarry(ok);
+        FastLoadDiag?.Invoke($"trap: flag={flag:X2} payload={payload.Length} copied={toCopy} chk={chk:X2} expChk={checksum:X2} ok={ok}");
 
         // A real 48K load runs at ~44 T-states per data bit averaged with
         // pilot/sync overhead — call it ~44 T/byte over the whole block so
@@ -165,6 +170,9 @@ public sealed class SpectrumMachine : IIoBus
         PopReturn();
         return (int)(Cpu.TStates - tStart);
     }
+
+    /// <summary>Optional diagnostic sink for fast-load trap events.</summary>
+    public Action<string>? FastLoadDiag { get; set; }
 
     private void SetCarry(bool c)
     {

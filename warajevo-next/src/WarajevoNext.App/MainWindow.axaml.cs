@@ -59,7 +59,21 @@ public partial class MainWindow : Window
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
         _timer.Tick += (_, _) => Tick();
         _timer.Start();
+
+        // Optional TCP control server. Only starts if WARAJEVO_NEXT_CTRL_PORT
+        // is set (recommend 10001); see ControlServer.cs for the grammar.
+        if (int.TryParse(Environment.GetEnvironmentVariable("WARAJEVO_NEXT_CTRL_PORT"), out var ctrlPort) && ctrlPort > 0)
+        {
+            try
+            {
+                _control = new ControlServer(ctrlPort, () => _machine, () => _framePix);
+                _control.Start();
+            }
+            catch (Exception ex) { Console.WriteLine($"[ctrl] failed to start: {ex.Message}"); }
+        }
     }
+
+    private ControlServer? _control;
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 
@@ -250,7 +264,8 @@ public partial class MainWindow : Window
         await Task.Delay(400);
     }
 
-    private static void SavePngBgra(string path, uint[] pixels, int w, int h)
+    // Public for use by the optional ControlServer's SNAP command.
+    public static void SavePngBgra(string path, uint[] pixels, int w, int h)
     {
         // Minimal PNG writer: uncompressed deflate wrap of the raw filtered
         // scanlines. Keeps the app free of any external image dependency.

@@ -86,7 +86,29 @@ public sealed class SpectrumMachine : IIoBus
     {
         Cpu.RequestInterrupt();
         long target = Cpu.TStates + TStatesPerFrame;
-        while (Cpu.TStates < target) StepOnce();
+        long prev = Cpu.TStates;
+        while (Cpu.TStates < target)
+        {
+            StepOnce();
+            // Advance the tape pulse machinery by exactly the T-states the
+            // last step consumed. Required for any loader that reads the
+            // EAR bit itself (Sentinel's "Searching 00" Firebird loader,
+            // Aquaplane's multi-load stub, ...) - without this feed the
+            // tape's edge state never flips even while IsPlaying is true,
+            // and the loader's polling loop times out to "R Tape loading
+            // error". Cheap when Tape is null or Stop()ped.
+            if (Tape != null && Tape.IsPlaying)
+            {
+                long now = Cpu.TStates;
+                int delta = (int)(now - prev);
+                if (delta > 0) Tape.Tick(delta);
+                prev = now;
+            }
+            else
+            {
+                prev = Cpu.TStates;
+            }
+        }
         FrameCount++;
     }
 

@@ -115,6 +115,19 @@ public partial class MainWindow : Window
         else SetStatus($"Booted with 48.rom ({rom48.Length} bytes).");
         _machine = new SpectrumMachine(SpectrumModel.FortyEight, rom48);
         _machine.FastLoadDiag = s => Console.WriteLine($"[fastload] {s}");
+        // WARAJEVO_NEXT_FASTLOAD=0 / false / off disables the 0x0556 trap so
+        // the tape loads through the ROM's real edge-decoded LD-BYTES routine
+        // (with proper border stripes and audio pulses). Any other value or
+        // the variable being unset leaves the trap on.
+        var flEnv = Environment.GetEnvironmentVariable("WARAJEVO_NEXT_FASTLOAD");
+        if (!string.IsNullOrEmpty(flEnv) &&
+            (flEnv.Equals("0", StringComparison.Ordinal) ||
+             flEnv.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+             flEnv.Equals("off", StringComparison.OrdinalIgnoreCase)))
+        {
+            _machine.FastLoad = false;
+            Console.WriteLine("[boot] fast-load trap DISABLED (WARAJEVO_NEXT_FASTLOAD=" + flEnv + ")");
+        }
         _machine.Reset();
 
         // If the user passed --tape PATH, auto-load and play it. Fast-load

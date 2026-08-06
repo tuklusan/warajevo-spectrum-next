@@ -169,7 +169,13 @@ public sealed class TapeDevice
         payload = new ReadOnlySpan<byte>(_tap, start + 1, len - 2);
         _blockPtr += 2 + len;
         CurrentBlock++;
-        if (_blockPtr >= _tap.Length) { IsPlaying = false; _state = State.Idle; }
+        if (_blockPtr >= _tap.Length) { IsPlaying = false; _state = State.Idle; return true; }
+        // Resync the pulse-edge state machine on the new block so that any
+        // subsequent Tick() calls (e.g. from SpectrumMachine.RunFrame after
+        // the fast-load trap has returned) emit pilot / sync / data pulses
+        // for the block AFTER the one we just fast-loaded, not for a stale
+        // position mid-way through the block we already consumed.
+        StartBlock();
         return true;
     }
 }

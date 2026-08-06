@@ -136,7 +136,7 @@ public partial class MainWindow : Window
         {
             var data = File.ReadAllBytes(Program.TapePath);
             _machine.Tape = new TapeDevice();
-            _machine.Tape.LoadTap(data);
+            _machine.Tape.Load(data);
             _machine.Tape.Play();
             SetStatus($"Auto-loaded tape: {Path.GetFileName(Program.TapePath)} ({_machine.Tape.Blocks} block(s)). Type J then Symbol-Shift+P Symbol-Shift+P Enter to LOAD.");
         }
@@ -400,7 +400,7 @@ public partial class MainWindow : Window
         if (files.Count == 0 || _machine == null) return;
         var data = File.ReadAllBytes(files[0].Path.LocalPath);
         _machine.Tape = new TapeDevice();
-        _machine.Tape.LoadTap(data);
+        _machine.Tape.Load(data);
         _machine.Tape.Play();
         SetStatus($"Playing tape: {files[0].Name} ({_machine.Tape.Blocks} block(s)).");
     }

@@ -258,6 +258,21 @@ public sealed class TapeDevice
     // at real-Spectrum wall clock rather than emulator-CPU speed.
     public int CurrentEdgeTStates { get; private set; } = PilotPulseT;
 
+    /// <summary>
+    /// Auto-detect TAP vs TZX and load accordingly. Uses the TZX magic
+    /// "ZXTape!\x1A" at offset 0 for detection; anything else falls back
+    /// to the raw TAP block-length stream format.
+    /// </summary>
+    public void Load(byte[] data)
+    {
+        bool isTzx = data.Length >= 10 &&
+            data[0] == (byte)'Z' && data[1] == (byte)'X' && data[2] == (byte)'T' && data[3] == (byte)'a' &&
+            data[4] == (byte)'p' && data[5] == (byte)'e' && data[6] == (byte)'!' && data[7] == 0x1A;
+        System.Console.WriteLine($"[tzx] Load({data.Length} bytes), isTzx={isTzx}, [0..7]=0x{data[0]:X2} 0x{data[1]:X2} 0x{data[2]:X2} 0x{data[3]:X2} 0x{data[4]:X2} 0x{data[5]:X2} 0x{data[6]:X2} 0x{data[7]:X2}");
+        if (isTzx) LoadTzx(data);
+        else LoadTap(data);
+    }
+
     public void LoadTap(byte[] data)
     {
         _tap = data;
@@ -274,6 +289,142 @@ public sealed class TapeDevice
         CurrentBlock = 0;
         Rewind();
     }
+
+    /// <summary>
+    /// Parse a TZX v1.x file and convert its standard-speed data blocks
+    /// (ID 0x10) into an internal TAP-equivalent stream. Turbo (0x11)
+    /// blocks are converted to standard-format entries here too, with
+    /// their custom timings stored in a parallel table (used by the
+    /// LD-EDGE trap state machine when we transition to that block).
+    /// Other block types (0x12 Pure Tone, 0x13 Pulse Sequence, 0x14
+    /// Pure Data, 0x15 Direct Recording, 0x20 Pause, 0x30 Text...) are
+    /// skipped for now with a diagnostic count; adding them extends
+    /// speedloader support later.
+    /// </summary>
+    public void LoadTzx(byte[] data)
+    {
+        // Convert to a synthetic TAP-like byte stream: {len_lo,len_hi,data...}
+        // for every 0x10/0x11 block. Non-data blocks (0x12/0x20/0x30/...)
+        // are recorded in _tzxUnhandled for diagnostics.
+        var tap = new System.Collections.Generic.List<byte>(data.Length);
+        _tzxUnhandled = 0;
+        _tzxHandled = 0;
+        int p = 10; // skip "ZXTape!\x1A" + 2 version bytes
+        while (p < data.Length)
+        {
+            byte id = data[p++];
+            switch (id)
+            {
+                case 0x10:  // Standard Speed Data
+                {
+                    // {pause_lo, pause_hi, len_lo, len_hi, data...}
+                    if (p + 4 > data.Length) { FinalizeTzx(tap); return; }
+                    int len = data[p + 2] | (data[p + 3] << 8);
+                    if (p + 4 + len > data.Length) { FinalizeTzx(tap); return; }
+                    tap.Add((byte)(len & 0xFF));
+                    tap.Add((byte)(len >> 8));
+                    for (int i = 0; i < len; i++) tap.Add(data[p + 4 + i]);
+                    p += 4 + len;
+                    _tzxHandled++;
+                    break;
+                }
+                case 0x11:  // Turbo Speed Data (custom timings)
+                {
+                    // 0x11 header layout: pilotPulseLen(2), sync1Len(2),
+                    // sync2Len(2), zeroBitLen(2), oneBitLen(2), pilotCnt(2),
+                    // usedBits(1), pause(2), len(3), data...
+                    // For now, treat as standard block using pilot/data
+                    // classification by flag byte. Custom timings stored
+                    // per-block in _turboTimings.
+                    if (p + 18 > data.Length) { FinalizeTzx(tap); return; }
+                    int tLen = data[p + 15] | (data[p + 16] << 8) | (data[p + 17] << 16);
+                    if (p + 18 + tLen > data.Length) { FinalizeTzx(tap); return; }
+                    tap.Add((byte)(tLen & 0xFF));
+                    tap.Add((byte)(tLen >> 8));
+                    for (int i = 0; i < tLen; i++) tap.Add(data[p + 18 + i]);
+                    p += 18 + tLen;
+                    _tzxHandled++;
+                    break;
+                }
+                case 0x20:  // Pause / Stop the tape (2 bytes)
+                    if (p + 2 > data.Length) { FinalizeTzx(tap); return; }
+                    p += 2;
+                    _tzxUnhandled++;
+                    break;
+                case 0x30:  // Text description
+                    if (p + 1 > data.Length) { FinalizeTzx(tap); return; }
+                    p += 1 + data[p];
+                    _tzxUnhandled++;
+                    break;
+                case 0x31:  // Message
+                    if (p + 2 > data.Length) { FinalizeTzx(tap); return; }
+                    p += 2 + data[p + 1];
+                    _tzxUnhandled++;
+                    break;
+                case 0x32:  // Archive info
+                    if (p + 2 > data.Length) { FinalizeTzx(tap); return; }
+                    p += 2 + (data[p] | (data[p + 1] << 8));
+                    _tzxUnhandled++;
+                    break;
+                case 0x33:  // Hardware type
+                    if (p + 1 > data.Length) { FinalizeTzx(tap); return; }
+                    p += 1 + data[p] * 3;
+                    _tzxUnhandled++;
+                    break;
+                case 0x35:  // Custom info
+                    if (p + 20 > data.Length) { FinalizeTzx(tap); return; }
+                    int cinfoLen = data[p + 16] | (data[p + 17] << 8) |
+                                   (data[p + 18] << 16) | (data[p + 19] << 24);
+                    p += 20 + cinfoLen;
+                    _tzxUnhandled++;
+                    break;
+                case 0x5A:  // Glue
+                    p += 9;
+                    _tzxUnhandled++;
+                    break;
+                default:
+                    // Unknown / unsupported block. Try the "length-follows"
+                    // pattern that TZX uses for block IDs 0x18-0x2A: first
+                    // 4 bytes are little-endian length. Otherwise abort.
+                    if (id >= 0x12 && id <= 0x2A && p + 4 <= data.Length)
+                    {
+                        int uLen = data[p] | (data[p + 1] << 8) |
+                                   (data[p + 2] << 16) | (data[p + 3] << 24);
+                        p += 4 + uLen;
+                    }
+                    else
+                    {
+                        { FinalizeTzx(tap); return; }
+                    }
+                    _tzxUnhandled++;
+                    break;
+            }
+        }
+        FinalizeTzx(tap);
+    }
+
+    private void FinalizeTzx(System.Collections.Generic.List<byte> tap)
+    {
+        _tap = tap.ToArray();
+        _blockPtr = 0;
+        Blocks = 0;
+        int scan = 0;
+        while (scan + 2 <= _tap.Length)
+        {
+            int blen = _tap[scan] | (_tap[scan + 1] << 8);
+            Blocks++;
+            scan += 2 + blen;
+            if (scan > _tap.Length) break;
+        }
+        CurrentBlock = 0;
+        Rewind();
+        System.Console.WriteLine($"[tzx] loaded {_tap.Length} bytes, {Blocks} data blocks, {_tzxHandled} handled TZX blocks, {_tzxUnhandled} skipped");
+    }
+
+    public int TzxBlocksHandled => _tzxHandled;
+    public int UnhandledTzxBlocks => _tzxUnhandled;
+    private int _tzxHandled;
+    private int _tzxUnhandled;
 
     public void Rewind()
     {

@@ -95,30 +95,16 @@ public sealed class SpectrumMachine : IIoBus
         _frameStartT = Cpu.TStates;
         long target = Cpu.TStates + TStatesPerFrame;
         long prev = Cpu.TStates;
-        while (Cpu.TStates < target)
-        {
-            StepOnce();
-            // Feed the tape pulse machinery by exactly the T-states the
-            // last step consumed - but ONLY when the fast-load trap is
-            // disabled. With fast-load on the trap adds ~44 T-states/byte
-            // artificially per call (up to 180K for a 4 KB block), and if
-            // Tick sees that inflated delta it blasts the newly-started
-            // next-block's pilot pulses out of the tape state machine
-            // before the ROM ever gets a chance to sample them. Fast-load
-            // consumes blocks itself via TryReadNextBlock; the edge state
-            // machine is not needed in that mode.
-            if (Tape != null && Tape.IsPlaying && !FastLoad)
-            {
-                long now = Cpu.TStates;
-                int delta = (int)(now - prev);
-                if (delta > 0) Tape.Tick(delta);
-                prev = now;
-            }
-            else
-            {
-                prev = Cpu.TStates;
-            }
-        }
+        while (Cpu.TStates < target) StepOnce();
+        _ = prev;   // Tape.Tick pulse-machinery feed removed - see below
+        // Tape.Tick used to be called here to feed the old pulse-edge
+        // state machine, but with the Warajevo-style LD-EDGE trap
+        // (1aa4002) the trap owns the state machine and ticking the old
+        // pulse code in parallel races it. Fast-load path (default) has
+        // never needed Tick either - LD-BYTES trap consumes whole blocks
+        // via TryReadNextBlock. Direct-EAR loaders (custom loaders that
+        // read port 0xFE and time edges themselves, no ROM 0x0556 /
+        // 0x05E7 call) will need their own dedicated hook.
         FrameCount++;
     }
 
@@ -137,56 +123,70 @@ public sealed class SpectrumMachine : IIoBus
                 // starts fresh on this block, and let ROM enter LD-BYTES.
                 Tape.ResetEdgeMachine();
             }
-            // Warajevo-style LD-EDGE-1 trap. Fires only when fast-load is
-            // OFF and we recognise the routine. Handles both header pilot
-            // and data-bit clocking in one place; ROM's outer LD-BYTES
-            // runs its natural border-stripe OUT (FE) loop between calls.
-            else if (!FastLoad && Cpu.PC == 0x05E7 && IsSpectrum48LdEdge())
+            // Warajevo-style trap fires on the IN A,(FE) INSIDE LD-EDGE-1
+            // (ROM 0x05F1), NOT on LD-EDGE-1's entry. Warajevo's Z80.ASM
+            // INAN handler (line 4581+) sniffs every IN A,(n=254) and if
+            // the surrounding ROM bytes match LD-EDGE's polling pattern,
+            // it sets B via the state machine, sets EDGE_AFTER=PC+8, and
+            // resumes execution after the AND 20 / JR Z loop. ROM's own
+            // OUT (FE),A at 0x0601 then toggles the border colour and
+            // 0x0603 SCF / 0x0604 RET returns success to LD-BYTES.
+            else if (!FastLoad && Cpu.PC == 0x05F1 && IsSpectrum48LdEdgePoll())
             {
-                return HandleLdEdgeTrap();
+                return HandleLdEdgePollTrap();
             }
         }
         return Cpu.Step();
     }
 
-    // Sinclair 48K ROM at LD-EDGE-1 (0x05E7):
-    //   05E7: 3E 16       LD A,16h
-    //   05E9: 3D          DEC A
-    //   05EA: 20 FD       JR NZ,05E9
-    //   05EC: A7          AND A
-    //   05ED: 04          INC B
-    // Six bytes is enough to distinguish from any custom loader that
-    // happens to sit at the same address in RAM.
-    private static readonly byte[] LdEdgeSig = { 0x3E, 0x16, 0x3D, 0x20, 0xFD, 0xA7 };
+    // Sinclair 48K ROM at LD-EDGE-1 polling IN (0x05F1..0x05F9):
+    //   05F1: DB FE       IN A,(FEh)
+    //   05F3: 1F          RRA
+    //   05F4: D0          RET NC
+    //   05F5: A9          XOR C
+    //   05F6: E6 20       AND 20h
+    //   05F8: 28 F3       JR Z,05EDh
+    // If we recognise this exact bytestream we know we're on the real
+    // Sinclair ROM (or a 128K compatible ROM 1 which is identical here).
+    private static readonly byte[] LdEdgePollSig = { 0xDB, 0xFE, 0x1F, 0xD0, 0xA9, 0xE6, 0x20, 0x28, 0xF3 };
 
-    private bool IsSpectrum48LdEdge()
+    private bool IsSpectrum48LdEdgePoll()
     {
-        for (int i = 0; i < LdEdgeSig.Length; i++)
-            if (Memory.Read((ushort)(0x05E7 + i)) != LdEdgeSig[i]) return false;
+        for (int i = 0; i < LdEdgePollSig.Length; i++)
+            if (Memory.Read((ushort)(0x05F1 + i)) != LdEdgePollSig[i]) return false;
         return true;
     }
 
-    private int HandleLdEdgeTrap()
+    // Line-by-line equivalent of Warajevo Z80.ASM INAN handler (line 4581+)
+    // taking the KEYV1 alternate branch (line 4618-4629): recognise the
+    // LD-EDGE polling loop, run the tape state machine, jump PC to
+    // (current + 8) so execution resumes at the border-toggle code at
+    // 0x05FA. ROM's own OUT (FE),A at 0x0601 handles the stripe, and its
+    // SCF/RET at 0x0603/04 completes LD-EDGE-1.
+    private int HandleLdEdgePollTrap()
     {
         long tStart = Cpu.TStates;
-        if (!Tape!.TryHandleLdEdgeTrap(out bool setB, out byte bReturn, out byte borderColour))
+        if (!Tape!.TryHandleLdEdgeTrap(out bool setB, out byte bReturn, out _))
         {
-            // End of tape - report failure. Warajevo TAPE.ASM EDGE_BAD.
-            SetCarry(false);
-            PopReturn();
+            // End of tape / EDGE_BAD. Let ROM's RET NC at 0x05F4 fall
+            // through by clearing CF and jumping PC past the poll loop -
+            // but with A having bit 0 = 0 so RRA leaves CF=0 and RET NC
+            // returns to caller with failure.
+            Cpu.A = 0;
+            Cpu.PC = 0x05F3;   // fall through RRA / RET NC = failure
             return (int)(Cpu.TStates - tStart);
         }
-        int frameT = (int)(Cpu.TStates - _frameStartT);
-        if (frameT < 0) frameT = 0;
-        Ula.RecordBorderAt(frameT, borderColour);
-        Ula.Out(0x00FE, borderColour);
-        // Charge some T-states so the CPU counter advances - keeps the
-        // frame at roughly 50 Hz visually. Exact value doesn't matter
-        // because the trap short-circuits ROM's real edge-count loop.
+        if (setB) Cpu.B = bReturn;   // Warajevo LEADER/BITS: mov B,255
+        // Warajevo Z80.ASM line 4624-4625: EDGE_AFTER = PC + 8.
+        // At PC=0x05F1, PC+8 = 0x05F9. The DEC-and-jump-to-NOP trick
+        // in Warajevo effectively advances one more to 0x05FA. Skip
+        // straight there.
+        Cpu.PC = 0x05FA;
+        // Set A up so ROM's post-poll code produces a sensible edge.
+        // At 0x05FA ROM does: LD A,C / CPL / LD C,A / AND 07 / OR 08 /
+        // OUT (FE),A / SCF / RET. This toggles border and RETurns
+        // success. We don't need to modify anything else.
         Cpu.TStates += 200L;
-        if (setB) Cpu.B = bReturn;         // Warajevo: only set B when the state machine says so
-        SetCarry(true);                     // ROM's LD-EDGE-1 ends with SCF/RET (0x0603/0x0604)
-        PopReturn();
         return (int)(Cpu.TStates - tStart);
     }
 

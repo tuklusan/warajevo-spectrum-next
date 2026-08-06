@@ -125,7 +125,8 @@ public class MachineSmokeTests
     {
         // ---- build a ROM stub that carries the LD-BYTES sentinel at 0x0556.
         var rom = new byte[0x4000];
-        rom[0x0556] = 0xEB; rom[0x0557] = 0xDD; rom[0x0558] = 0xE5; rom[0x0559] = 0x3F;
+        rom[0x0556] = 0x14; rom[0x0557] = 0x08; rom[0x0558] = 0x15;
+        rom[0x0559] = 0xF3; rom[0x055A] = 0x3E; rom[0x055B] = 0x0F;
 
         var m = new SpectrumMachine(SpectrumModel.FortyEight, rom);
 

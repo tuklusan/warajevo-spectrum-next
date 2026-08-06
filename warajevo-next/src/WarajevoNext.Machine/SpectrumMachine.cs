@@ -36,13 +36,20 @@ public sealed class SpectrumMachine : IIoBus
     /// </summary>
     public bool FastLoad { get; set; } = true;
 
-    // Sentinel bytes of the Sinclair 48K ROM at LD-BYTES:
-    //   0556: EB           EX DE,HL
-    //   0557: DD E5        PUSH IX
-    //   0559: 3F           CCF
+    // Sentinel bytes of the Sinclair 48K ROM at LD-BYTES (SA/LD-RET is at
+    // 0x053F; the actual routine at 0x0556 begins the LOAD path with a
+    // brief housekeeping preamble that saves D, disables interrupts and
+    // primes the border colour before dropping into the pilot-scan loop):
+    //   0556: 14           INC  D
+    //   0557: 08           EX   AF,AF'
+    //   0558: 15           DEC  D
+    //   0559: F3           DI
+    //   055A: 3E 0F        LD   A,0Fh          ; border colour
+    //   055C: D3 FE        OUT  (FEh),A
     // The 128K "ROM 1" 48K-compatibility image has the same bytes here, so
-    // the same sentinel covers both models.
-    private static readonly byte[] LdBytesSig = { 0xEB, 0xDD, 0xE5, 0x3F };
+    // the same sentinel covers both models. Six bytes are more than enough
+    // to disambiguate against random RAM contents.
+    private static readonly byte[] LdBytesSig = { 0x14, 0x08, 0x15, 0xF3, 0x3E, 0x0F };
 
     public SpectrumMachine(SpectrumModel model, byte[] rom48, byte[]? rom128_0 = null, byte[]? rom128_1 = null)
     {

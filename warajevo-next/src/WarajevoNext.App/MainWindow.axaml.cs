@@ -194,10 +194,15 @@ public partial class MainWindow : Window
 
     private async Task HoldAsync(SpectrumKey[] keys)
     {
+        // 200 ms hold + 400 ms release. The ROM's own key-debounce
+        // (KEY-INPUT at 0x02BF and REPEAT-KEY at 0x0310) needs to see a
+        // clean released-then-pressed transition or it treats a follow-up
+        // press of the same key as auto-repeat and drops it. 400 ms is
+        // longer than the ROM's inter-key wait even at slow REPEAT-KEY.
         foreach (var k in keys) _machine!.Keyboard.SetKey(k, true);
-        await Task.Delay(120);   // ~6 frames
+        await Task.Delay(200);
         foreach (var k in keys) _machine!.Keyboard.SetKey(k, false);
-        await Task.Delay(80);    // release gap
+        await Task.Delay(400);
     }
 
     private static void SavePngBgra(string path, uint[] pixels, int w, int h)

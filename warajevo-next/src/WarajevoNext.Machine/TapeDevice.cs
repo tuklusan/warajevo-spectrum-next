@@ -244,6 +244,10 @@ public sealed class TapeDevice
     public int PilotPulsesLeft => _pilotPulsesLeft;
     public int DataPtr => _dataPtr - _blockPtr - 2;
     public int BlockLen => _blockLen;
+    public string EdgePhaseName => _edgePhase.ToString();
+    public int EdgeCnt => _edgeCnt;
+    public int EdgeBitCnt => _edgeBitCnt;
+    public int EdgeDataPos => _edgeDataPtr - _blockPtr - 2;
 
     public void LoadTap(byte[] data)
     {

@@ -126,8 +126,11 @@ public sealed class SpectrumMachine : IIoBus
             if (Cpu.PC == 0x0556 && IsSpectrum48LdBytes())
             {
                 if (FastLoad) return HandleFastLoadTrap();
-                TraceLog.Log($"[ld-bytes.enter] pc=0x0556 t={Cpu.TStates} FastLoad=off - resetting edge machine");
-                Tape.ResetEdgeMachine();
+                TraceLog.Log($"[ld-bytes.enter] pc=0x0556 t={Cpu.TStates} FastLoad=off - phase={Tape.EdgePhaseName} block={Tape.CurrentBlock} eCnt={Tape.EdgeCnt}");
+                // Do NOT reset the edge state machine here! Real cassette
+                // tape keeps playing across ROM's LD-BYTES retries. If we
+                // restart the pilot every LD-BYTES entry, we can never
+                // reach SYNC/BITS phases.
             }
             else if (!FastLoad && Cpu.PC == 0x05F1 && IsSpectrum48LdEdgePoll())
             {
@@ -180,8 +183,8 @@ public sealed class SpectrumMachine : IIoBus
         if (setB) Cpu.B = bReturn;
         Cpu.PC = 0x05FA;       // Warajevo EDGE_AFTER = PC + 8 (+1 for NOP trick)
         Cpu.TStates += 200L;
-        if (_ldEdgeTrapFires <= 20 || (_ldEdgeTrapFires & 0xFF) == 0)
-            TraceLog.Log($"[ld-edge#{_ldEdgeTrapFires}] pc-was=0x05F1 pc-now=0x05FA setB={setB} bWas=0x{pcBeforeB:X2} bNow=0x{Cpu.B:X2} c=0x{Cpu.C:X2} sp=0x{Cpu.SP:X4} t={Cpu.TStates} tape={Tape.StateName}");
+        if (_ldEdgeTrapFires <= 40 || (_ldEdgeTrapFires & 0xFF) == 0)
+            TraceLog.Log($"[ld-edge#{_ldEdgeTrapFires}] setB={setB} bWas=0x{pcBeforeB:X2} bNow=0x{Cpu.B:X2} c=0x{Cpu.C:X2} sp=0x{Cpu.SP:X4} t={Cpu.TStates} phase={Tape.EdgePhaseName} eCnt={Tape.EdgeCnt} eBitCnt={Tape.EdgeBitCnt} block={Tape.CurrentBlock} dPos={Tape.EdgeDataPos}");
         return (int)(Cpu.TStates - tStart);
     }
 

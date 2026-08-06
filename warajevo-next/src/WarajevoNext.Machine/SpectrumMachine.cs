@@ -127,7 +127,8 @@ public sealed class SpectrumMachine : IIoBus
         bool isLoad = (Cpu.AF_ & 1) != 0;
         ushort dest = Cpu.IX;
         ushort remaining = Cpu.DE;
-        FastLoadDiag?.Invoke($"trap: PC=0556 A'={expectedFlag:X2} CF'={(isLoad?1:0)} IX={dest:X4} DE={remaining}");
+        ushort returnAddr = (ushort)(Memory.Read(Cpu.SP) | (Memory.Read((ushort)(Cpu.SP + 1)) << 8));
+        FastLoadDiag?.Invoke($"trap: PC=0556 A'={expectedFlag:X2} CF'={(isLoad?1:0)} IX={dest:X4} DE={remaining} ret={returnAddr:X4} SP={Cpu.SP:X4}");
 
         if (!Tape!.TryReadNextBlock(out byte flag, out ReadOnlySpan<byte> payload, out byte checksum))
         {
@@ -147,14 +148,26 @@ public sealed class SpectrumMachine : IIoBus
         // continues clocking bytes past DE=0 for the sole purpose of getting
         // to the checksum. Undershoot (DE > payload.Length) is a short-block
         // failure: the real ROM would time out mid-byte.
+        // Copy min(DE, payload.Length) bytes into memory, and XOR the whole
+        // block for checksum verification the way LD-BYTES does — the ROM
+        // continues clocking bytes past DE=0 for the sole purpose of getting
+        // to the checksum. Undershoot (DE > payload.Length) is a short-block
+        // failure: the real ROM would time out mid-byte.
+        //
+        // NOTE on VERIFY (CF'=0): the ROM's LD-CONTRL / LD-LOOK-H uses VERIFY
+        // as its header-scan primitive — it wants LD-BYTES to _read_ the
+        // header block into memory anyway so it can inspect the program name
+        // and type, then decide whether to load the data block. Skipping the
+        // write on VERIFY breaks LOAD "" completely. We always write.
         int toCopy = Math.Min(remaining, payload.Length);
         byte chk = flag;
         for (int i = 0; i < toCopy; i++)
         {
-            if (isLoad) Memory.Write((ushort)(dest + i), payload[i]);
+            Memory.Write((ushort)(dest + i), payload[i]);
             chk ^= payload[i];
         }
         for (int i = toCopy; i < payload.Length; i++) chk ^= payload[i];
+        _ = isLoad; // kept for future VERIFY behaviour once we distinguish LD-LOOK-H
 
         Cpu.IX = (ushort)(dest + toCopy);
         Cpu.DE = (ushort)(remaining - toCopy);

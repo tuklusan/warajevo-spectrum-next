@@ -45,6 +45,12 @@ public sealed class TapeDevice
     public int Blocks { get; private set; }
     public int CurrentBlock { get; private set; }
 
+    // Diagnostics
+    public string StateName => _state.ToString();
+    public int PilotPulsesLeft => _pilotPulsesLeft;
+    public int DataPtr => _dataPtr - _blockPtr - 2;
+    public int BlockLen => _blockLen;
+
     public void LoadTap(byte[] data)
     {
         _tap = data;
